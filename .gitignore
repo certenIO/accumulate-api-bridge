@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# SDK node_modules (SDK source is tracked)
+typescript-sdk-accumulate/node_modules/
+
+# Build output
+dist/
+*.js.map
+
+# Environment files (contain secrets!)
+.env
+.env.local
+.env.*.local
+
+# Data storage
+data/
+*.json.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Temporary files
+tmp/
+temp/
+.cache/
+
+# Docker
+.docker/
+
+# Secrets - NEVER commit these!
+*.pem
+*.key
+credentials.json
+secrets.json

@@ -1,0 +1,14 @@
+export default API;
+export type { Discovery, TransportModule, } from "./hw/index.js";
+export type { LedgerAddress, LedgerAppName, LedgerDeviceInfo, LedgerSignature, LedgerVersion, } from "./model/results.js";
+export type { LedgerApi, LedgerKey, } from "./ledger-api.js";
+export type { default as Transport } from "@ledgerhq/hw-transport";
+import type { Discovery, TransportModule } from "./hw/index.js";
+import type { LedgerDeviceInfo } from "./model/results.js";
+import type { LedgerApi, LedgerKey } from "./ledger-api.js";
+import type Transport from "@ledgerhq/hw-transport";
+export declare function discoverDevices(accept?: (mod: TransportModule) => boolean): Promise<Discovery>;
+export declare function registerTransportModule(module: TransportModule): Promise<void>;
+export declare function API(transport: Transport): Promise<LedgerApi>;
+export declare function queryHidWallets(): Promise<Array<LedgerDeviceInfo>>;
+export declare function loadLedgerKey(api: LedgerApi, path: string): Promise<LedgerKey>;

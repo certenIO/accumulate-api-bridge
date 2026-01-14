@@ -1,0 +1,251 @@
+import { scan as rxScan } from "rxjs/operators";
+import { Address } from "../address/index.js";
+import * as BIPPath from "../bip44/path.js";
+import { Buffer } from "../common/buffer.js";
+import { SignatureType, Transaction } from "../core/index.js";
+import { encode } from "../encoding/index.js";
+import { Envelope } from "../messaging/index.js";
+import { BaseKey, Signer } from "../signing/index.js";
+import { discoverDevices } from "./hw/index.js";
+import { LedgerAddress, LedgerAppName, LedgerDeviceInfo, LedgerSignature, LedgerVersion, } from "./model/results.js";
+import { foreach, splitPath } from "./utils.js";
+const ledgerOpGetApplicationVersion = 0x03; // Returns the application version
+const ledgerOpGetAppName = 0x04; // Signs a transaction after having the user validate the parameters
+const ledgerOpGetPublicKey = 0x05; // Returns the public key and chainCode for a given BIP 32 path
+const ledgerOpSignTransaction = 0x06; // Returns specific wallet application configuration
+//P1 parameters
+const ledgerP1Display = 0x01;
+const ledgerP1InitTransactionData = 0x00; // First transaction data block for signing
+const ledgerP1ContTransactionData = 0x01; // Subsequent transaction data block for signing
+//P2 parameters
+const ledgerP2MoreTransactionData = 0x80; // More data to follow for transaction data
+const ledgerP2LastTransactionData = 0x00; // The last  data to follow for transaction data
+const ledgerP2DiscardAddressChainCode = 0x00; // Do not return the chain code along with the address
+/**
+ * {@link LedgerApi}
+ */
+export class LedgerApi {
+    constructor(transport) {
+        this.transport = transport;
+        transport.decorateAppAPIMethods(this, ["getPublicKey", "signTransaction", "getAppName", "getVersion"], "TFA");
+    }
+    async signerForLite(path) {
+        return Signer.forLite(await LedgerKey.load(this, path));
+    }
+    async signerForPage(page, path) {
+        return Signer.forPage(page, await LedgerKey.load(this, path));
+    }
+    /**
+     * get Factom address for a given BIP 32 path.
+     * @param path a path in BIP 32 format (note: all paths muth be hardened (e.g. .../0'/0' )
+     * @param boolDisplay if true, optionally display the address on the device, default = false
+     * @param boolChainCode, if true, return the chain code, default = false
+     * @param alias, a named key alias that is provided by the client to appear on the display, default = ""
+     * @return an object with a publicKey and address with optional chainCode and chainid
+     * @example
+     * const fctaddr = await fct.getAddress("44'/131'/0'/0/0")
+     * const accumulateaddr = await fct.getAddress("44'/281'/0'/0/0")
+     */
+    getPublicKey(path, boolDisplay = false, boolChainCode = false, alias = "") {
+        const bipPath = BIPPath.fromPath(path).toPathArray();
+        const buffer = new Writable(1 + bipPath.length * 4);
+        buffer.writeUInt8(bipPath.length, 0);
+        bipPath.forEach((segment, index) => {
+            buffer.writeUInt32BE(segment, 1 + index * 4);
+        });
+        if (alias.length > 0) {
+            buffer.writeUInt8(alias.length);
+            // @ts-ignore
+            buffer.write(Buffer.from(alias, "utf-8"));
+        }
+        return this.transport
+            .send(0xe0, ledgerOpGetPublicKey, boolDisplay || false ? ledgerP1Display : 0x00, boolChainCode || false ? ledgerP2DiscardAddressChainCode : 0x00, buffer)
+            .then((response) => {
+            const result = new LedgerAddress("", "", "");
+            let offset = 0;
+            const publicKeyLength = response[offset++];
+            result.publicKey = Buffer.from(response.subarray(offset, offset + publicKeyLength)).toString("hex");
+            offset += publicKeyLength;
+            const chainCodeLength = response[offset++];
+            result.chainCode = Buffer.from(response.subarray(offset, offset + chainCodeLength)).toString("hex");
+            offset += chainCodeLength;
+            const addressLength = response[offset++];
+            result.address = Buffer.from(response.subarray(offset, offset + addressLength)).toString("utf-8");
+            return result;
+        });
+    }
+    /**
+     * You can sign a transaction and retrieve v, r, s given the raw transaction and the BIP 32 path of the account to sign
+     * @param path a path in BIP 32 format (note: all paths muth be hardened (e.g. .../0'/0' )
+     * @param unsignedEnvelopeHex The binary Marshaled Transaction Envelope with unsigned Signature struct in Hex
+     * @example
+     const result = await fct.signTransaction("44'/131'/0'/0/0", "02016253dfaa7301010087db406ff65cb9dd72a1e99bcd51da5e03b0ccafc237dbf1318a8d7438e22371c892d6868d20f02894db071e2eb38fdc56c697caaeba7dc19bddae2c6e7084cc3120d667b49f")
+     */
+    signTransaction(path, unsignedEnvelopeHex /* Marshaled Transaction Envelope with unsigned Signature struct in Hex */) {
+        const paths = splitPath(path);
+        let offset = 0;
+        const rawTransaction = Buffer.from(unsignedEnvelopeHex, "hex");
+        const toSend = [];
+        let response;
+        const headerLen = 1 + 4 * paths.length;
+        while (offset !== rawTransaction.length + headerLen) {
+            const maxChunkSize = offset === 0 ? 255 - headerLen : 255;
+            const chunkSize = offset + maxChunkSize - headerLen > rawTransaction.length
+                ? rawTransaction.length
+                : maxChunkSize;
+            const buffer = new Writable(offset === 0 ? 1 + paths.length * 4 /*+ chunkSize*/ : chunkSize);
+            if (offset === 0) {
+                buffer[0] = paths.length;
+                paths.forEach((element, index) => {
+                    buffer.writeUInt32BE(element, 1 + 4 * index);
+                });
+                offset += headerLen;
+                //rawTransaction.copy(buffer, 1 + 4 * paths.length, offset, offset + chunkSize);
+            }
+            else {
+                const start = offset - headerLen;
+                buffer.set(rawTransaction.slice(start, start + chunkSize));
+                offset += chunkSize;
+            }
+            toSend.push(buffer);
+        }
+        return foreach(toSend, (data, i) => this.transport
+            .send(0xe0, ledgerOpSignTransaction, i === 0 ? ledgerP1InitTransactionData : ledgerP1ContTransactionData, i === toSend.length - 1 ? ledgerP2LastTransactionData : ledgerP2MoreTransactionData, data)
+            .then((apduResponse) => {
+            response = apduResponse;
+        })).then(() => {
+            const signatureLen = response[0];
+            const ret = new LedgerSignature(response.slice(1, signatureLen + 1).toString("hex"), response[1 + signatureLen] == 1);
+            //for ecdsa it returns the DER format the user should converted to the rsv format if sigtype == eth
+            //for ed25519 and RCD (i.e. eddsa signing) it returns the simple 64-bit signature
+            return ret;
+        });
+    }
+    /**
+     */
+    getVersion() {
+        return this.transport.send(0xe0, ledgerOpGetApplicationVersion, 0x00, 0x00).then((response) => {
+            const result = new LedgerVersion(response[0], response[1], response[2]);
+            return result;
+        });
+    }
+    /**
+     */
+    getAppName() {
+        return this.transport.send(0xe0, ledgerOpGetAppName, 0x00, 0x00).then((resp) => {
+            const result = new LedgerAppName(resp.subarray(0, resp.length - 2).toString());
+            return result;
+        });
+    }
+}
+/**
+ * @returns LedgerDeviceInfo array
+ */
+export async function queryHidWallets() {
+    // This linked to {@link queryWallets:function}, but that function doesn't
+    // exist and typedoc does not like that
+    const module = "hid";
+    const devices = new Array();
+    let tm;
+    const events = discoverDevices((m) => {
+        tm = m;
+        if (module.split(",").includes(m.id)) {
+            return true;
+        }
+        return false;
+    });
+    await events
+        .pipe(rxScan((acc, value) => {
+        let copy;
+        if (value.type === "remove") {
+            copy = acc.filter((a) => a.id === value.id);
+        }
+        else {
+            const existing = acc.find((o) => o.id === value.id);
+            if (existing) {
+                const i = acc.indexOf(existing);
+                copy = [...acc];
+                if (value.name) {
+                    copy[i] = value;
+                }
+            }
+            else {
+                copy = acc.concat({
+                    id: value.id,
+                    name: value.name,
+                });
+                const wi = new LedgerDeviceInfo();
+                wi.transportModule = tm;
+                wi.deviceId = value.id;
+                wi.name = value.name;
+                devices.push(wi);
+            }
+        }
+        return copy;
+    }, []))
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        .subscribe((_value) => {
+        //console.log(value)
+    });
+    return devices;
+}
+class Writable extends Uint8Array {
+    constructor() {
+        super(...arguments);
+        this.offset = 0;
+    }
+    writeUInt8(value, offset = this.offset) {
+        this[offset] = value & 0xff;
+        this.offset = offset;
+    }
+    writeUInt32BE(value, offset = this.offset) {
+        for (let i = 0; i < 4; i++) {
+            this.writeUInt8(value >> (8 * (3 - i)), offset + i);
+        }
+    }
+    write(value, offset = this.offset) {
+        if (offset + value.length > this.length)
+            throw new Error("insufficient space allocated");
+        this.set(value, offset);
+    }
+}
+export class LedgerKey extends BaseKey {
+    static async load(api, path) {
+        const { publicKey: pubHex } = await api.getPublicKey(path);
+        const pubBytes = Buffer.from(pubHex, "hex");
+        const bipPath = BIPPath.fromPath(path).toPathArray();
+        if (bipPath[0] != 0x8000002c)
+            throw new Error(`unsupported key path ${path}`);
+        let type;
+        switch (bipPath[1]) {
+            case 0x80000083:
+                type = SignatureType.RCD1;
+                break;
+            case 0x80000119:
+                type = SignatureType.ED25519;
+                break;
+            default:
+                throw new Error(`unsupported key path ${path}`);
+        }
+        const key = await Address.fromKey(type, pubBytes);
+        return new this(api, path, key);
+    }
+    constructor(api, path, publicKey) {
+        super(publicKey);
+        this.api = api;
+        this.path = path;
+    }
+    async signRaw(sig, msg) {
+        if (!(msg instanceof Transaction)) {
+            throw new Error(`The Ledger app does not support blind signing or non-transactions`);
+        }
+        const env = new Envelope({
+            signatures: [sig],
+            transaction: [msg],
+        });
+        const data = Buffer.from(encode(env)).toString("hex");
+        const { signature } = await this.api.signTransaction(this.path, data);
+        return Buffer.from(signature, "hex");
+    }
+}
+//# sourceMappingURL=ledger-api.js.map

@@ -1,0 +1,475 @@
+import * as types from "./types_gen.js";
+import { AccountType, DataEntryType, TransactionType, SignatureType, NetworkMaintenanceOperationType, AccountAuthOperationType, KeyPageOperationType } from "./enums_gen.js";
+/** @ignore */
+export var Account;
+(function (Account) {
+    function fromObject(obj) {
+        if (obj instanceof types.ADI)
+            return obj;
+        if (obj instanceof types.AnchorLedger)
+            return obj;
+        if (obj instanceof types.BlockLedger)
+            return obj;
+        if (obj instanceof types.DataAccount)
+            return obj;
+        if (obj instanceof types.KeyBook)
+            return obj;
+        if (obj instanceof types.KeyPage)
+            return obj;
+        if (obj instanceof types.LiteDataAccount)
+            return obj;
+        if (obj instanceof types.LiteIdentity)
+            return obj;
+        if (obj instanceof types.LiteTokenAccount)
+            return obj;
+        if (obj instanceof types.SyntheticLedger)
+            return obj;
+        if (obj instanceof types.SystemLedger)
+            return obj;
+        if (obj instanceof types.TokenAccount)
+            return obj;
+        if (obj instanceof types.TokenIssuer)
+            return obj;
+        if (obj instanceof types.UnknownAccount)
+            return obj;
+        if (obj instanceof types.UnknownSigner)
+            return obj;
+        switch (obj.type) {
+            case AccountType.Identity:
+            case "identity":
+                return new types.ADI(obj);
+            case AccountType.AnchorLedger:
+            case "anchorLedger":
+                return new types.AnchorLedger(obj);
+            case AccountType.BlockLedger:
+            case "blockLedger":
+                return new types.BlockLedger(obj);
+            case AccountType.DataAccount:
+            case "dataAccount":
+                return new types.DataAccount(obj);
+            case AccountType.KeyBook:
+            case "keyBook":
+                return new types.KeyBook(obj);
+            case AccountType.KeyPage:
+            case "keyPage":
+                return new types.KeyPage(obj);
+            case AccountType.LiteDataAccount:
+            case "liteDataAccount":
+                return new types.LiteDataAccount(obj);
+            case AccountType.LiteIdentity:
+            case "liteIdentity":
+                return new types.LiteIdentity(obj);
+            case AccountType.LiteTokenAccount:
+            case "liteTokenAccount":
+                return new types.LiteTokenAccount(obj);
+            case AccountType.SyntheticLedger:
+            case "syntheticLedger":
+                return new types.SyntheticLedger(obj);
+            case AccountType.SystemLedger:
+            case "systemLedger":
+                return new types.SystemLedger(obj);
+            case AccountType.TokenAccount:
+            case "tokenAccount":
+                return new types.TokenAccount(obj);
+            case AccountType.TokenIssuer:
+            case "tokenIssuer":
+                return new types.TokenIssuer(obj);
+            case AccountType.Unknown:
+            case "unknown":
+                return new types.UnknownAccount(obj);
+            case AccountType.UnknownSigner:
+            case "unknownSigner":
+                return new types.UnknownSigner(obj);
+            default:
+                throw new Error(`Unknown account '${obj.type}'`);
+        }
+    }
+    Account.fromObject = fromObject;
+})(Account || (Account = {}));
+/** @ignore */
+export var DataEntry;
+(function (DataEntry) {
+    function fromObject(obj) {
+        if (obj instanceof types.AccumulateDataEntry)
+            return obj;
+        if (obj instanceof types.DoubleHashDataEntry)
+            return obj;
+        if (obj instanceof types.FactomDataEntryWrapper)
+            return obj;
+        switch (obj.type) {
+            case DataEntryType.Accumulate:
+            case "accumulate":
+                return new types.AccumulateDataEntry(obj);
+            case DataEntryType.DoubleHash:
+            case "doubleHash":
+                return new types.DoubleHashDataEntry(obj);
+            case DataEntryType.Factom:
+            case "factom":
+                return new types.FactomDataEntryWrapper(obj);
+            default:
+                throw new Error(`Unknown data entry '${obj.type}'`);
+        }
+    }
+    DataEntry.fromObject = fromObject;
+})(DataEntry || (DataEntry = {}));
+/** @ignore */
+export var TransactionBody;
+(function (TransactionBody) {
+    function fromObject(obj) {
+        if (obj instanceof types.AcmeFaucet)
+            return obj;
+        if (obj instanceof types.ActivateProtocolVersion)
+            return obj;
+        if (obj instanceof types.AddCredits)
+            return obj;
+        if (obj instanceof types.BlockValidatorAnchor)
+            return obj;
+        if (obj instanceof types.BurnCredits)
+            return obj;
+        if (obj instanceof types.BurnTokens)
+            return obj;
+        if (obj instanceof types.CreateDataAccount)
+            return obj;
+        if (obj instanceof types.CreateIdentity)
+            return obj;
+        if (obj instanceof types.CreateKeyBook)
+            return obj;
+        if (obj instanceof types.CreateKeyPage)
+            return obj;
+        if (obj instanceof types.CreateLiteTokenAccount)
+            return obj;
+        if (obj instanceof types.CreateToken)
+            return obj;
+        if (obj instanceof types.CreateTokenAccount)
+            return obj;
+        if (obj instanceof types.DirectoryAnchor)
+            return obj;
+        if (obj instanceof types.IssueTokens)
+            return obj;
+        if (obj instanceof types.LockAccount)
+            return obj;
+        if (obj instanceof types.NetworkMaintenance)
+            return obj;
+        if (obj instanceof types.RemoteTransaction)
+            return obj;
+        if (obj instanceof types.SendTokens)
+            return obj;
+        if (obj instanceof types.SyntheticBurnTokens)
+            return obj;
+        if (obj instanceof types.SyntheticCreateIdentity)
+            return obj;
+        if (obj instanceof types.SyntheticDepositCredits)
+            return obj;
+        if (obj instanceof types.SyntheticDepositTokens)
+            return obj;
+        if (obj instanceof types.SyntheticForwardTransaction)
+            return obj;
+        if (obj instanceof types.SyntheticWriteData)
+            return obj;
+        if (obj instanceof types.SystemGenesis)
+            return obj;
+        if (obj instanceof types.SystemWriteData)
+            return obj;
+        if (obj instanceof types.TransferCredits)
+            return obj;
+        if (obj instanceof types.UpdateAccountAuth)
+            return obj;
+        if (obj instanceof types.UpdateKey)
+            return obj;
+        if (obj instanceof types.UpdateKeyPage)
+            return obj;
+        if (obj instanceof types.WriteData)
+            return obj;
+        if (obj instanceof types.WriteDataTo)
+            return obj;
+        switch (obj.type) {
+            case TransactionType.AcmeFaucet:
+            case "acmeFaucet":
+                return new types.AcmeFaucet(obj);
+            case TransactionType.ActivateProtocolVersion:
+            case "activateProtocolVersion":
+                return new types.ActivateProtocolVersion(obj);
+            case TransactionType.AddCredits:
+            case "addCredits":
+                return new types.AddCredits(obj);
+            case TransactionType.BlockValidatorAnchor:
+            case "blockValidatorAnchor":
+                return new types.BlockValidatorAnchor(obj);
+            case TransactionType.BurnCredits:
+            case "burnCredits":
+                return new types.BurnCredits(obj);
+            case TransactionType.BurnTokens:
+            case "burnTokens":
+                return new types.BurnTokens(obj);
+            case TransactionType.CreateDataAccount:
+            case "createDataAccount":
+                return new types.CreateDataAccount(obj);
+            case TransactionType.CreateIdentity:
+            case "createIdentity":
+                return new types.CreateIdentity(obj);
+            case TransactionType.CreateKeyBook:
+            case "createKeyBook":
+                return new types.CreateKeyBook(obj);
+            case TransactionType.CreateKeyPage:
+            case "createKeyPage":
+                return new types.CreateKeyPage(obj);
+            case TransactionType.CreateLiteTokenAccount:
+            case "createLiteTokenAccount":
+                return new types.CreateLiteTokenAccount(obj);
+            case TransactionType.CreateToken:
+            case "createToken":
+                return new types.CreateToken(obj);
+            case TransactionType.CreateTokenAccount:
+            case "createTokenAccount":
+                return new types.CreateTokenAccount(obj);
+            case TransactionType.DirectoryAnchor:
+            case "directoryAnchor":
+                return new types.DirectoryAnchor(obj);
+            case TransactionType.IssueTokens:
+            case "issueTokens":
+                return new types.IssueTokens(obj);
+            case TransactionType.LockAccount:
+            case "lockAccount":
+                return new types.LockAccount(obj);
+            case TransactionType.NetworkMaintenance:
+            case "networkMaintenance":
+                return new types.NetworkMaintenance(obj);
+            case TransactionType.Remote:
+            case "remote":
+                return new types.RemoteTransaction(obj);
+            case TransactionType.SendTokens:
+            case "sendTokens":
+                return new types.SendTokens(obj);
+            case TransactionType.SyntheticBurnTokens:
+            case "syntheticBurnTokens":
+                return new types.SyntheticBurnTokens(obj);
+            case TransactionType.SyntheticCreateIdentity:
+            case "syntheticCreateIdentity":
+                return new types.SyntheticCreateIdentity(obj);
+            case TransactionType.SyntheticDepositCredits:
+            case "syntheticDepositCredits":
+                return new types.SyntheticDepositCredits(obj);
+            case TransactionType.SyntheticDepositTokens:
+            case "syntheticDepositTokens":
+                return new types.SyntheticDepositTokens(obj);
+            case TransactionType.SyntheticForwardTransaction:
+            case "syntheticForwardTransaction":
+                return new types.SyntheticForwardTransaction(obj);
+            case TransactionType.SyntheticWriteData:
+            case "syntheticWriteData":
+                return new types.SyntheticWriteData(obj);
+            case TransactionType.SystemGenesis:
+            case "systemGenesis":
+                return new types.SystemGenesis(obj);
+            case TransactionType.SystemWriteData:
+            case "systemWriteData":
+                return new types.SystemWriteData(obj);
+            case TransactionType.TransferCredits:
+            case "transferCredits":
+                return new types.TransferCredits(obj);
+            case TransactionType.UpdateAccountAuth:
+            case "updateAccountAuth":
+                return new types.UpdateAccountAuth(obj);
+            case TransactionType.UpdateKey:
+            case "updateKey":
+                return new types.UpdateKey(obj);
+            case TransactionType.UpdateKeyPage:
+            case "updateKeyPage":
+                return new types.UpdateKeyPage(obj);
+            case TransactionType.WriteData:
+            case "writeData":
+                return new types.WriteData(obj);
+            case TransactionType.WriteDataTo:
+            case "writeDataTo":
+                return new types.WriteDataTo(obj);
+            default:
+                throw new Error(`Unknown transaction body '${obj.type}'`);
+        }
+    }
+    TransactionBody.fromObject = fromObject;
+})(TransactionBody || (TransactionBody = {}));
+/** @ignore */
+export var AccountAuthOperation;
+(function (AccountAuthOperation) {
+    function fromObject(obj) {
+        if (obj instanceof types.AddAccountAuthorityOperation)
+            return obj;
+        if (obj instanceof types.DisableAccountAuthOperation)
+            return obj;
+        if (obj instanceof types.EnableAccountAuthOperation)
+            return obj;
+        if (obj instanceof types.RemoveAccountAuthorityOperation)
+            return obj;
+        switch (obj.type) {
+            case AccountAuthOperationType.AddAuthority:
+            case "addAuthority":
+                return new types.AddAccountAuthorityOperation(obj);
+            case AccountAuthOperationType.Disable:
+            case "disable":
+                return new types.DisableAccountAuthOperation(obj);
+            case AccountAuthOperationType.Enable:
+            case "enable":
+                return new types.EnableAccountAuthOperation(obj);
+            case AccountAuthOperationType.RemoveAuthority:
+            case "removeAuthority":
+                return new types.RemoveAccountAuthorityOperation(obj);
+            default:
+                throw new Error(`Unknown account auth operation '${obj.type}'`);
+        }
+    }
+    AccountAuthOperation.fromObject = fromObject;
+})(AccountAuthOperation || (AccountAuthOperation = {}));
+/** @ignore */
+export var KeyPageOperation;
+(function (KeyPageOperation) {
+    function fromObject(obj) {
+        if (obj instanceof types.AddKeyOperation)
+            return obj;
+        if (obj instanceof types.RemoveKeyOperation)
+            return obj;
+        if (obj instanceof types.SetRejectThresholdKeyPageOperation)
+            return obj;
+        if (obj instanceof types.SetResponseThresholdKeyPageOperation)
+            return obj;
+        if (obj instanceof types.SetThresholdKeyPageOperation)
+            return obj;
+        if (obj instanceof types.UpdateAllowedKeyPageOperation)
+            return obj;
+        if (obj instanceof types.UpdateKeyOperation)
+            return obj;
+        switch (obj.type) {
+            case KeyPageOperationType.Add:
+            case "add":
+                return new types.AddKeyOperation(obj);
+            case KeyPageOperationType.Remove:
+            case "remove":
+                return new types.RemoveKeyOperation(obj);
+            case KeyPageOperationType.SetRejectThreshold:
+            case "setRejectThreshold":
+                return new types.SetRejectThresholdKeyPageOperation(obj);
+            case KeyPageOperationType.SetResponseThreshold:
+            case "setResponseThreshold":
+                return new types.SetResponseThresholdKeyPageOperation(obj);
+            case KeyPageOperationType.SetThreshold:
+            case "setThreshold":
+                return new types.SetThresholdKeyPageOperation(obj);
+            case KeyPageOperationType.UpdateAllowed:
+            case "updateAllowed":
+                return new types.UpdateAllowedKeyPageOperation(obj);
+            case KeyPageOperationType.Update:
+            case "update":
+                return new types.UpdateKeyOperation(obj);
+            default:
+                throw new Error(`Unknown key page operation '${obj.type}'`);
+        }
+    }
+    KeyPageOperation.fromObject = fromObject;
+})(KeyPageOperation || (KeyPageOperation = {}));
+/** @ignore */
+export var Signature;
+(function (Signature) {
+    function fromObject(obj) {
+        if (obj instanceof types.AuthoritySignature)
+            return obj;
+        if (obj instanceof types.BTCLegacySignature)
+            return obj;
+        if (obj instanceof types.BTCSignature)
+            return obj;
+        if (obj instanceof types.DelegatedSignature)
+            return obj;
+        if (obj instanceof types.ED25519Signature)
+            return obj;
+        if (obj instanceof types.ETHSignature)
+            return obj;
+        if (obj instanceof types.EcdsaSha256Signature)
+            return obj;
+        if (obj instanceof types.InternalSignature)
+            return obj;
+        if (obj instanceof types.LegacyED25519Signature)
+            return obj;
+        if (obj instanceof types.PartitionSignature)
+            return obj;
+        if (obj instanceof types.RCD1Signature)
+            return obj;
+        if (obj instanceof types.ReceiptSignature)
+            return obj;
+        if (obj instanceof types.RemoteSignature)
+            return obj;
+        if (obj instanceof types.RsaSha256Signature)
+            return obj;
+        if (obj instanceof types.SignatureSet)
+            return obj;
+        if (obj instanceof types.TypedDataSignature)
+            return obj;
+        switch (obj.type) {
+            case SignatureType.Authority:
+            case "authority":
+                return new types.AuthoritySignature(obj);
+            case SignatureType.BTCLegacy:
+            case "btclegacy":
+                return new types.BTCLegacySignature(obj);
+            case SignatureType.BTC:
+            case "btc":
+                return new types.BTCSignature(obj);
+            case SignatureType.Delegated:
+            case "delegated":
+                return new types.DelegatedSignature(obj);
+            case SignatureType.ED25519:
+            case "ed25519":
+                return new types.ED25519Signature(obj);
+            case SignatureType.ETH:
+            case "eth":
+                return new types.ETHSignature(obj);
+            case SignatureType.EcdsaSha256:
+            case "ecdsaSha256":
+                return new types.EcdsaSha256Signature(obj);
+            case SignatureType.Internal:
+            case "internal":
+                return new types.InternalSignature(obj);
+            case SignatureType.LegacyED25519:
+            case "legacyED25519":
+                return new types.LegacyED25519Signature(obj);
+            case SignatureType.Partition:
+            case "partition":
+                return new types.PartitionSignature(obj);
+            case SignatureType.RCD1:
+            case "rcd1":
+                return new types.RCD1Signature(obj);
+            case SignatureType.Receipt:
+            case "receipt":
+                return new types.ReceiptSignature(obj);
+            case SignatureType.Remote:
+            case "remote":
+                return new types.RemoteSignature(obj);
+            case SignatureType.RsaSha256:
+            case "rsaSha256":
+                return new types.RsaSha256Signature(obj);
+            case SignatureType.Set:
+            case "set":
+                return new types.SignatureSet(obj);
+            case SignatureType.TypedData:
+            case "typedData":
+                return new types.TypedDataSignature(obj);
+            default:
+                throw new Error(`Unknown signature '${obj.type}'`);
+        }
+    }
+    Signature.fromObject = fromObject;
+})(Signature || (Signature = {}));
+/** @ignore */
+export var NetworkMaintenanceOperation;
+(function (NetworkMaintenanceOperation) {
+    function fromObject(obj) {
+        if (obj instanceof types.PendingTransactionGCOperation)
+            return obj;
+        switch (obj.type) {
+            case NetworkMaintenanceOperationType.PendingTransactionGC:
+            case "pendingTransactionGC":
+                return new types.PendingTransactionGCOperation(obj);
+            default:
+                throw new Error(`Unknown network maintenance operation '${obj.type}'`);
+        }
+    }
+    NetworkMaintenanceOperation.fromObject = fromObject;
+})(NetworkMaintenanceOperation || (NetworkMaintenanceOperation = {}));
+//# sourceMappingURL=unions_gen.js.map
