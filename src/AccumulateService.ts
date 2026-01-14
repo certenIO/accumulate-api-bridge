@@ -10,7 +10,7 @@ let TransactionType: any;
 let Transaction: any;
 let Envelope: any;
 
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
 import fs from 'fs';
 
@@ -18,20 +18,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // SDK path configuration - supports both local and Docker deployment
-const getSDKPath = () => {
+// Returns a file:// URL for proper ESM import on all platforms
+const getSDKUrl = () => {
   // 1. Check environment variable first
   if (process.env.ACCUMULATE_SDK_PATH) {
-    return process.env.ACCUMULATE_SDK_PATH;
+    const sdkPath = process.env.ACCUMULATE_SDK_PATH;
+    // Convert to file URL if it's a path
+    if (sdkPath.startsWith('file://')) {
+      return sdkPath;
+    }
+    return pathToFileURL(sdkPath).href;
   }
 
   // 2. Check local typescript-sdk-accumulate directory (relative to project root)
   const localSDKPath = path.resolve(__dirname, '..', 'typescript-sdk-accumulate');
   if (fs.existsSync(localSDKPath)) {
     console.log(`Using local SDK at: ${localSDKPath}`);
-    return localSDKPath;
+    return pathToFileURL(localSDKPath).href;
   }
 
-  // 3. Fall back to Docker path
+  // 3. Fall back to Docker path (already a valid path for Linux)
   return '/typescript-sdk-accumulate/lib';
 };
 
@@ -70,11 +76,11 @@ export class AccumulateService {
   private async initializeAsync() {
     try {
       this.logger.info('Loading TypeScript SDK accumulate client');
-      const sdkPath = getSDKPath();
+      const sdkUrl = getSDKUrl();
 
-      // Dynamic import with configurable path
+      // Dynamic import with file:// URL for cross-platform compatibility
       // @ts-ignore: Module path determined at runtime
-      const accumulate = await import(`${sdkPath}/index.js`);
+      const accumulate = await import(`${sdkUrl}/index.js`);
 
       // Extract modules using destructuring
       ({ api_v3, api_v2, core, ED25519Key, Signer } = accumulate);
@@ -83,14 +89,14 @@ export class AccumulateService {
 
       // Import Envelope from messaging
       // @ts-ignore: Module path determined at runtime
-      const messaging = await import(`${sdkPath}/messaging/index.js`);
+      const messaging = await import(`${sdkUrl}/messaging/index.js`);
       Envelope = messaging.Envelope;
 
       // Preload encoding index module to fix circular dependency issue
       // @ts-ignore: Module path determined at runtime
-      const encodingIndex = await import(`${sdkPath}/encoding/index.js`);
+      const encodingIndex = await import(`${sdkUrl}/encoding/index.js`);
       // @ts-ignore: Module path determined at runtime
-      const encodable = await import(`${sdkPath}/encoding/encodable.js`);
+      const encodable = await import(`${sdkUrl}/encoding/encodable.js`);
       // @ts-ignore: Optional method may not exist
       if (encodable.setIndexModule) {
         // @ts-ignore: Optional method may not exist
