@@ -1189,13 +1189,14 @@ export class AccumulateService {
       const adiSigner = Signer.forPage(signerUrl, keypageKey).withVersion(currentVersion);
 
       // Build the key swap operation (update operation with oldEntry -> newEntry)
+      // keyHash must be a Buffer, not a hex string
       const swapOperation = {
         type: 'update',
         oldEntry: {
-          keyHash: oldKeyHash
+          keyHash: Buffer.from(oldKeyHash, 'hex')
         },
         newEntry: {
-          keyHash: newKeyHash
+          keyHash: Buffer.from(newKeyHash, 'hex')
         }
       };
 
