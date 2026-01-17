@@ -1381,18 +1381,18 @@ export class AccumulateService {
         this.logger.warn('Could not query LTA balance', { error: error instanceof Error ? error.message : String(error) });
       }
 
-      // Get credit balance from LID using existing getBalance method
+      // Get credit balance from LID - credits are at data.creditBalance
       let creditBalance = 0;
       try {
-        const creditResult = await this.getBalance(lidUrl);
-        creditBalance = parseInt(creditResult?.balance || '0');
-        this.logger.info('📊 LID balance result', {
+        const creditResult = await this.client.query(lidUrl);
+        creditBalance = parseInt(creditResult?.data?.creditBalance || '0');
+        this.logger.info('📊 LID credit balance result', {
           lidUrl,
           creditBalance,
-          accountType: creditResult?.accountType
+          accountType: creditResult?.data?.type
         });
       } catch (error) {
-        this.logger.warn('Could not query LID balance', { error: error instanceof Error ? error.message : String(error) });
+        this.logger.warn('Could not query LID credit balance', { error: error instanceof Error ? error.message : String(error) });
       }
 
       const minCredits = parseInt(process.env.ONBOARDING_MIN_SPONSOR_CREDITS || '100000');
