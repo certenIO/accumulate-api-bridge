@@ -104,7 +104,8 @@ async function waitForAccountToExist(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const result = await accumulateService.getAccount(accountUrl);
-      if (result && result.url) {
+      // getAccount returns { success: true, account: {...} } on success
+      if (result && (result.success || result.account)) {
         console.log(`✅ Account exists after ${attempt} attempt(s): ${accountUrl}`);
         return true;
       }
