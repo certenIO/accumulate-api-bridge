@@ -1154,6 +1154,282 @@ export class AccumulateService {
     }
   }
 
+  /**
+   * Perform an atomic key swap on a keypage
+   * Replaces the old key with a new key in a single transaction
+   * Used for onboarding: swap sponsor's temporary key -> user's permanent key
+   */
+  async performKeySwap(
+    keyPageUrl: string,
+    oldKeyHash: string,
+    newKeyHash: string,
+    signerKeypageUrl?: string
+  ): Promise<any> {
+    try {
+      this.logger.info('🔄 Performing atomic key swap on keypage', {
+        keyPageUrl,
+        oldKeyHash: oldKeyHash.substring(0, 16) + '...',
+        newKeyHash: newKeyHash.substring(0, 16) + '...'
+      });
+
+      // Use the same keypage as signer if not specified
+      const signerUrl = signerKeypageUrl || keyPageUrl;
+
+      // Get current key page version
+      const currentVersion = await this.getKeyPageVersion(signerUrl);
+      this.logger.info('🔍 KeyPage version for key swap:', { signerUrl, currentVersion });
+
+      // Create ADI signer using sponsor's key
+      const lidPrivateKey = process.env.ACCUM_PRIV_KEY?.substring(0, 64) || '';
+      const privateKeyBytes = Buffer.from(lidPrivateKey, 'hex');
+      const keypageKey = ED25519Key.from(privateKeyBytes);
+
+      const adiSigner = Signer.forPage(signerUrl, keypageKey).withVersion(currentVersion);
+
+      // Build the key swap operation (update operation with oldEntry -> newEntry)
+      const swapOperation = {
+        type: 'update',
+        oldEntry: {
+          keyHash: oldKeyHash
+        },
+        newEntry: {
+          keyHash: newKeyHash
+        }
+      };
+
+      this.logger.info('🔑 Key swap operation:', {
+        type: 'update',
+        oldKeyHash: oldKeyHash.substring(0, 16) + '...',
+        newKeyHash: newKeyHash.substring(0, 16) + '...'
+      });
+
+      // Create updateKeyPage transaction with the swap operation
+      const transaction = new Transaction({
+        header: {
+          principal: keyPageUrl,
+        },
+        body: {
+          type: 'updateKeyPage',
+          operations: [swapOperation],
+        },
+      });
+
+      // Sign with fresh timestamp
+      const timestamp = this.getNextTimestamp();
+      this.logger.info('🕐 Using fresh timestamp for key swap', { timestamp });
+
+      const signature = await adiSigner.sign(transaction, { timestamp });
+
+      // Create envelope and submit
+      const envelope = new Envelope({
+        transaction: [transaction],
+        signatures: [signature]
+      });
+
+      this.logger.info('📮 Submitting key swap transaction...');
+
+      const submitResult = await this.client.submit(envelope.asObject());
+
+      // Check for success
+      for (const result of submitResult) {
+        if (!result.success) {
+          throw new Error(`Key swap failed: ${result.message}`);
+        }
+        this.logger.info('⏳ Waiting for key swap transaction to complete...');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+
+      this.logger.info('✅ Key swap completed successfully', {
+        txId: submitResult[0].status.txID,
+        keyPageUrl,
+        oldKeyRemoved: oldKeyHash.substring(0, 16) + '...',
+        newKeyAdded: newKeyHash.substring(0, 16) + '...'
+      });
+
+      return {
+        success: true,
+        txId: submitResult[0].status.txID,
+        hash: submitResult[0].status.txID,
+        keyPageUrl: keyPageUrl,
+        oldKeyHash: oldKeyHash,
+        newKeyHash: newKeyHash,
+        message: 'Key swap completed successfully - ownership transferred',
+        createdAt: new Date()
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to perform key swap', {
+        error: error instanceof Error ? error.message : String(error),
+        keyPageUrl,
+        oldKeyHash: oldKeyHash.substring(0, 16) + '...',
+        newKeyHash: newKeyHash.substring(0, 16) + '...'
+      });
+      throw new Error(`Failed to perform key swap: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Create an ADI for onboarding with sponsor's key as initial authority
+   * Returns details needed for subsequent key swap
+   */
+  async createIdentityForOnboarding(adiName: string): Promise<any> {
+    try {
+      // Handle both full URLs and just names
+      let normalizedName: string;
+      if (adiName.startsWith('acc://')) {
+        normalizedName = adiName.substring(6);
+      } else {
+        normalizedName = adiName.endsWith('.acme') ? adiName : `${adiName}.acme`;
+      }
+
+      const adiUrl = `acc://${normalizedName}`;
+      const keyBookUrl = `${adiUrl}/book`;
+      const keyPageUrl = `${adiUrl}/book/1`;
+
+      this.logger.info('🆔 Creating ADI for onboarding', { adiUrl, keyBookUrl });
+
+      // Use the sponsor's key (from env) as the initial key
+      const fullPrivateKey = process.env.ACCUM_PRIV_KEY || '';
+      const privateKeyHex = fullPrivateKey.substring(0, 64);
+      const privateKeyBytes = Buffer.from(privateKeyHex, 'hex');
+      const sponsorKey = ED25519Key.from(privateKeyBytes);
+      const sponsorKeyHash = sponsorKey.address.publicKeyHash.toString('hex');
+
+      // Create the ADI with sponsor's key
+      const transaction = new core.Transaction({
+        header: {
+          principal: this.lid.url,
+        },
+        body: {
+          type: 'createIdentity',
+          url: adiUrl,
+          keyHash: sponsorKey.address.publicKeyHash,
+          keyBookUrl: keyBookUrl,
+        },
+      });
+
+      // Sign with fresh timestamp
+      const timestamp = this.getNextTimestamp();
+      const signature = await this.lid.sign(transaction, { timestamp });
+
+      const submitResult = await this.client.submit({
+        transaction: [transaction],
+        signatures: [signature]
+      });
+
+      // Check for success
+      for (const result of submitResult) {
+        if (!result.success) {
+          throw new Error(`ADI creation failed: ${result.message}`);
+        }
+      }
+
+      this.logger.info('✅ ADI created for onboarding', {
+        adiUrl,
+        sponsorKeyHash: sponsorKeyHash.substring(0, 16) + '...'
+      });
+
+      // Wait for ADI to propagate
+      this.logger.info('⏳ Waiting for ADI to propagate...');
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      return {
+        success: true,
+        txId: submitResult[0].status.txID,
+        adiUrl: adiUrl,
+        keyBookUrl: keyBookUrl,
+        keyPageUrl: keyPageUrl,
+        sponsorKeyHash: sponsorKeyHash,
+        message: 'ADI created with sponsor key - ready for key swap'
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to create ADI for onboarding', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw new Error(`Failed to create ADI for onboarding: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Get sponsor account status for onboarding
+   */
+  async getSponsorStatus(): Promise<any> {
+    try {
+      const ltaUrl = process.env.ACCUM_LTA || '';
+      const lidUrl = process.env.ACCUM_LID || '';
+
+      if (!ltaUrl || !lidUrl) {
+        return {
+          onboardingEnabled: false,
+          sponsorHealthy: false,
+          error: 'Sponsor accounts not configured'
+        };
+      }
+
+      // Get token balance from LTA
+      let tokenBalance = 0;
+      try {
+        const tokenResult = await this.client.query(ltaUrl);
+        tokenBalance = parseInt(tokenResult?.account?.balance || '0');
+      } catch (error) {
+        this.logger.warn('Could not query LTA balance', { error });
+      }
+
+      // Get credit balance from LID
+      let creditBalance = 0;
+      try {
+        const creditResult = await this.client.query(lidUrl);
+        creditBalance = parseInt(creditResult?.account?.creditBalance || '0');
+      } catch (error) {
+        this.logger.warn('Could not query LID balance', { error });
+      }
+
+      const minCredits = parseInt(process.env.ONBOARDING_MIN_SPONSOR_CREDITS || '100000');
+      const minTokens = parseInt(process.env.ONBOARDING_MIN_SPONSOR_TOKENS || '1000');
+      const creditsPerUser = parseInt(process.env.ONBOARDING_CREDITS_AMOUNT || '10000');
+      const onboardingEnabled = process.env.ONBOARDING_ENABLED === 'true';
+
+      // Token balance has 8 decimal places, convert to whole tokens
+      const tokensFormatted = tokenBalance / 100000000;
+      // Credits have 2 decimal places
+      const creditsFormatted = creditBalance / 100;
+
+      const sponsorHealthy = creditBalance >= minCredits && tokensFormatted >= minTokens;
+
+      this.logger.info('📊 Sponsor status check', {
+        tokenBalance: tokensFormatted,
+        creditBalance: creditsFormatted,
+        minCredits: minCredits / 100,
+        minTokens,
+        sponsorHealthy,
+        onboardingEnabled
+      });
+
+      return {
+        onboardingEnabled: onboardingEnabled && sponsorHealthy,
+        sponsorHealthy,
+        sponsorCredits: creditBalance,
+        sponsorTokens: tokenBalance,
+        sponsorCreditsFormatted: creditsFormatted,
+        sponsorTokensFormatted: tokensFormatted,
+        creditsPerUser,
+        minCreditsRequired: minCredits,
+        minTokensRequired: minTokens
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to get sponsor status', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return {
+        onboardingEnabled: false,
+        sponsorHealthy: false,
+        error: error instanceof Error ? error.message : 'Failed to check sponsor status'
+      };
+    }
+  }
+
   async getCreditBalance(accountUrl: string): Promise<number> {
     try {
       const result = await this.client.query(accountUrl);

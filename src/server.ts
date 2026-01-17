@@ -1778,6 +1778,287 @@ app.get('/api/v1/adi/keybooks', async (req, res) => {
   }
 });
 
+// =============================================================================
+// ONBOARDING ENDPOINTS - User ADI creation with sponsor funding
+// =============================================================================
+
+/**
+ * GET /api/v1/onboarding/sponsor-status
+ * Check sponsor health and available funds for onboarding
+ */
+app.get('/api/v1/onboarding/sponsor-status', async (req, res) => {
+  try {
+    console.log('📊 Checking onboarding sponsor status...');
+
+    const status = await accumulateService.getSponsorStatus();
+
+    res.json({
+      success: true,
+      ...status
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get sponsor status:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * POST /api/v1/onboarding/create-adi
+ * Create ADI + credits + data account for new user
+ * Uses sponsor's key as initial authority
+ */
+app.post('/api/v1/onboarding/create-adi', async (req, res) => {
+  try {
+    const { adiName, userPublicKeyHash } = req.body;
+
+    if (!adiName) {
+      return res.status(400).json({
+        success: false,
+        error: 'ADI name is required'
+      });
+    }
+
+    if (!userPublicKeyHash) {
+      return res.status(400).json({
+        success: false,
+        error: 'User public key hash is required'
+      });
+    }
+
+    // Validate public key hash format (64-char hex)
+    if (!/^[0-9a-fA-F]{64}$/.test(userPublicKeyHash)) {
+      return res.status(400).json({
+        success: false,
+        error: 'User public key hash must be a 64-character hexadecimal string'
+      });
+    }
+
+    console.log(`🚀 Starting onboarding ADI creation for: ${adiName}`);
+    console.log(`🔑 User public key hash: ${userPublicKeyHash.substring(0, 16)}...`);
+
+    // Step 1: Check sponsor status
+    const sponsorStatus = await accumulateService.getSponsorStatus();
+    if (!sponsorStatus.onboardingEnabled) {
+      return res.status(503).json({
+        success: false,
+        error: 'INSUFFICIENT_SPONSOR_FUNDS',
+        message: 'Onboarding is temporarily unavailable. Sponsor account needs to be refunded.',
+        sponsorStatus
+      });
+    }
+
+    // Step 2: Check if ADI already exists
+    const normalizedName = adiName.endsWith('.acme') ? adiName : `${adiName}.acme`;
+    const adiUrl = `acc://${normalizedName}`;
+
+    try {
+      const existingAdi = await accumulateService.getAccount(adiUrl);
+      if (existingAdi && existingAdi.account) {
+        return res.status(409).json({
+          success: false,
+          error: 'ADI_EXISTS',
+          message: `ADI name '${adiName}' is already taken. Please choose a different name.`
+        });
+      }
+    } catch (error) {
+      // ADI doesn't exist - this is expected, continue
+      console.log(`✅ ADI name ${adiName} is available`);
+    }
+
+    // Step 3: Create ADI with sponsor's key
+    console.log('🆔 Step 1/4: Creating ADI with sponsor key...');
+    const adiResult = await accumulateService.createIdentityForOnboarding(adiName);
+
+    if (!adiResult.success) {
+      throw new Error(`ADI creation failed: ${adiResult.message || 'Unknown error'}`);
+    }
+
+    console.log(`✅ ADI created: ${adiResult.adiUrl}`);
+
+    // Step 4: Add credits to the keypage
+    const creditsAmount = parseInt(process.env.ONBOARDING_CREDITS_AMOUNT || '10000');
+    const acmeForCredits = creditsAmount / 100; // Credits = ACME * 100
+
+    console.log(`💳 Step 2/4: Adding ${creditsAmount} credits (${acmeForCredits} ACME) to keypage...`);
+
+    const creditsResult = await retryWithDelay(
+      async () => {
+        return await accumulateService.addCredits(adiResult.keyPageUrl, acmeForCredits);
+      },
+      3,
+      2000,
+      `Adding credits to ${adiResult.keyPageUrl}`
+    );
+
+    console.log(`✅ Credits added: ${creditsResult.txId}`);
+
+    // Step 5: Create data account
+    console.log(`📄 Step 3/4: Creating data account...`);
+
+    const dataAccountResult = await retryWithDelay(
+      async () => {
+        return await accumulateService.createDataAccount(normalizedName, 'data');
+      },
+      3,
+      2000,
+      `Creating data account for ${adiResult.adiUrl}`
+    );
+
+    const dataAccountUrl = `${adiResult.adiUrl}/data`;
+    console.log(`✅ Data account created: ${dataAccountUrl}`);
+
+    // Get the keypage version for the key swap step
+    console.log(`📋 Step 4/4: Getting keypage version for key swap...`);
+
+    const keyPageVersion = await retryWithDelay(
+      async () => {
+        return await accumulateService.getKeyPageVersion(adiResult.keyPageUrl);
+      },
+      5,
+      2000,
+      `Getting keypage version for ${adiResult.keyPageUrl}`
+    );
+
+    console.log(`✅ Keypage version: ${keyPageVersion}`);
+
+    // Return all the details needed for key swap
+    res.json({
+      success: true,
+      adiUrl: adiResult.adiUrl,
+      keyBookUrl: adiResult.keyBookUrl,
+      keyPageUrl: adiResult.keyPageUrl,
+      dataAccountUrl: dataAccountUrl,
+      sponsorKeyHash: adiResult.sponsorKeyHash,
+      userKeyHash: userPublicKeyHash,
+      creditsAdded: creditsAmount,
+      keyPageVersion: keyPageVersion,
+      message: 'ADI created successfully. Ready for key swap to transfer ownership.'
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to create onboarding ADI:', error);
+
+    // Determine error type for better client handling
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    let errorCode = 'ONBOARDING_FAILED';
+
+    if (errorMessage.includes('already exists') || errorMessage.includes('already taken')) {
+      errorCode = 'ADI_EXISTS';
+    } else if (errorMessage.includes('insufficient') || errorMessage.includes('balance')) {
+      errorCode = 'INSUFFICIENT_SPONSOR_FUNDS';
+    }
+
+    res.status(500).json({
+      success: false,
+      error: errorCode,
+      message: errorMessage
+    });
+  }
+});
+
+/**
+ * POST /api/v1/onboarding/complete-key-swap
+ * Atomic key swap: replace sponsor's key with user's key on keypage
+ * This transfers ownership of the ADI to the user
+ */
+app.post('/api/v1/onboarding/complete-key-swap', async (req, res) => {
+  try {
+    const { keyPageUrl, sponsorKeyHash, userKeyHash, keyPageVersion } = req.body;
+
+    if (!keyPageUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'KeyPage URL is required'
+      });
+    }
+
+    if (!sponsorKeyHash) {
+      return res.status(400).json({
+        success: false,
+        error: 'Sponsor key hash is required'
+      });
+    }
+
+    if (!userKeyHash) {
+      return res.status(400).json({
+        success: false,
+        error: 'User key hash is required'
+      });
+    }
+
+    // Validate key hash formats
+    if (!/^[0-9a-fA-F]{64}$/.test(sponsorKeyHash)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Sponsor key hash must be a 64-character hexadecimal string'
+      });
+    }
+
+    if (!/^[0-9a-fA-F]{64}$/.test(userKeyHash)) {
+      return res.status(400).json({
+        success: false,
+        error: 'User key hash must be a 64-character hexadecimal string'
+      });
+    }
+
+    console.log(`🔄 Performing key swap on ${keyPageUrl}`);
+    console.log(`🔑 Sponsor key: ${sponsorKeyHash.substring(0, 16)}...`);
+    console.log(`🔑 User key: ${userKeyHash.substring(0, 16)}...`);
+
+    // Get fresh keypage version if not provided or to verify
+    let actualVersion = keyPageVersion;
+    if (!actualVersion) {
+      actualVersion = await accumulateService.getKeyPageVersion(keyPageUrl);
+      console.log(`📋 Using fresh keypage version: ${actualVersion}`);
+    }
+
+    // Perform the atomic key swap
+    const swapResult = await accumulateService.performKeySwap(
+      keyPageUrl,
+      sponsorKeyHash,
+      userKeyHash
+    );
+
+    if (!swapResult.success) {
+      throw new Error(swapResult.message || 'Key swap failed');
+    }
+
+    console.log(`✅ Key swap completed successfully: ${swapResult.txId}`);
+
+    res.json({
+      success: true,
+      txId: swapResult.txId,
+      keyPageUrl: keyPageUrl,
+      newOwnerKeyHash: userKeyHash,
+      message: 'Ownership transferred successfully. The ADI is now controlled by the user\'s key.'
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to complete key swap:', error);
+
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    let errorCode = 'KEY_SWAP_FAILED';
+
+    if (errorMessage.includes('version') || errorMessage.includes('nonce')) {
+      errorCode = 'KEY_PAGE_VERSION_MISMATCH';
+    } else if (errorMessage.includes('not found')) {
+      errorCode = 'KEYPAGE_NOT_FOUND';
+    } else if (errorMessage.includes('network') || errorMessage.includes('timeout')) {
+      errorCode = 'NETWORK_ERROR';
+    }
+
+    res.status(500).json({
+      success: false,
+      error: errorCode,
+      message: errorMessage
+    });
+  }
+});
+
 // Error handling middleware
 app.use((error: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Unhandled error:', error);
