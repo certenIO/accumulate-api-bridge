@@ -1367,32 +1367,32 @@ export class AccumulateService {
         };
       }
 
-      // Get token balance from LTA
+      // Get token balance from LTA using existing getBalance method
       let tokenBalance = 0;
       try {
-        const tokenResult = await this.client.query(ltaUrl);
-        tokenBalance = parseInt(tokenResult?.data?.balance || tokenResult?.account?.balance || '0');
-        this.logger.info('📊 LTA query result', {
+        const tokenResult = await this.getBalance(ltaUrl);
+        tokenBalance = parseInt(tokenResult?.balance || '0');
+        this.logger.info('📊 LTA balance result', {
           ltaUrl,
           balance: tokenBalance,
-          rawData: tokenResult?.data || tokenResult?.account
+          accountType: tokenResult?.accountType
         });
       } catch (error) {
-        this.logger.warn('Could not query LTA balance', { error });
+        this.logger.warn('Could not query LTA balance', { error: error instanceof Error ? error.message : String(error) });
       }
 
-      // Get credit balance from LID
+      // Get credit balance from LID using existing getBalance method
       let creditBalance = 0;
       try {
-        const creditResult = await this.client.query(lidUrl);
-        creditBalance = parseInt(creditResult?.data?.creditBalance || creditResult?.account?.creditBalance || '0');
-        this.logger.info('📊 LID query result', {
+        const creditResult = await this.getBalance(lidUrl);
+        creditBalance = parseInt(creditResult?.balance || '0');
+        this.logger.info('📊 LID balance result', {
           lidUrl,
           creditBalance,
-          rawData: creditResult?.data || creditResult?.account
+          accountType: creditResult?.accountType
         });
       } catch (error) {
-        this.logger.warn('Could not query LID balance', { error });
+        this.logger.warn('Could not query LID balance', { error: error instanceof Error ? error.message : String(error) });
       }
 
       const minCredits = parseInt(process.env.ONBOARDING_MIN_SPONSOR_CREDITS || '100000');
