@@ -1207,13 +1207,13 @@ export class AccumulateService {
       });
 
       // Create updateKeyPage transaction with the swap operation
-      // Note: the field is 'operation' (singular), not 'operations'
+      // Use TransactionType enum and 'operation' field (singular)
       const transaction = new Transaction({
         header: {
           principal: keyPageUrl,
         },
         body: {
-          type: 'updateKeyPage',
+          type: TransactionType.UpdateKeyPage,
           operation: [swapOperation],
         },
       });
