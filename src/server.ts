@@ -90,6 +90,72 @@ async function retryWithDelay<T>(
   throw new Error(`Retry logic failed unexpectedly for ${operationName}`);
 }
 
+/**
+ * Wait for an account to exist on the network by polling
+ * Used after creating ADI to ensure it has propagated before next step
+ */
+async function waitForAccountToExist(
+  accountUrl: string,
+  maxAttempts: number = 30,
+  delayMs: number = 1000
+): Promise<boolean> {
+  console.log(`⏳ Waiting for account to exist: ${accountUrl}`);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await accumulateService.getAccount(accountUrl);
+      if (result && result.url) {
+        console.log(`✅ Account exists after ${attempt} attempt(s): ${accountUrl}`);
+        return true;
+      }
+    } catch (error) {
+      // Account doesn't exist yet, keep polling
+    }
+
+    if (attempt < maxAttempts) {
+      console.log(`🔄 Polling attempt ${attempt}/${maxAttempts} - account not yet available, waiting ${delayMs}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw new Error(`Account ${accountUrl} did not become available after ${maxAttempts} attempts`);
+}
+
+/**
+ * Wait for credits to appear on a keypage by polling
+ * Used after adding credits to ensure the transaction has settled
+ */
+async function waitForKeyPageCredits(
+  keyPageUrl: string,
+  minCredits: number = 1,
+  maxAttempts: number = 30,
+  delayMs: number = 1000
+): Promise<number> {
+  console.log(`⏳ Waiting for credits on keypage: ${keyPageUrl} (min: ${minCredits})`);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await accumulateService.getAccount(keyPageUrl);
+      const creditBalance = result?.account?.creditBalance || result?.creditBalance || 0;
+
+      if (creditBalance >= minCredits) {
+        console.log(`✅ Credits found after ${attempt} attempt(s): ${creditBalance} on ${keyPageUrl}`);
+        return creditBalance;
+      }
+
+      console.log(`🔄 Polling attempt ${attempt}/${maxAttempts} - credits: ${creditBalance}, waiting ${delayMs}ms...`);
+    } catch (error) {
+      console.log(`🔄 Polling attempt ${attempt}/${maxAttempts} - keypage query failed, waiting ${delayMs}ms...`);
+    }
+
+    if (attempt < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw new Error(`Credits did not appear on ${keyPageUrl} after ${maxAttempts} attempts`);
+}
+
 // Comprehensive ADI credential mapping from environment variables
 function getAdiCredentialsFromEnv(adiUrl: string): { privateKey: string; publicKey: string; publicKeyHash: string } | null {
   // Direct ADI registry mappings
@@ -1879,6 +1945,9 @@ app.post('/api/v1/onboarding/create-adi', async (req, res) => {
 
     console.log(`✅ ADI created: ${adiResult.adiUrl}`);
 
+    // Wait for ADI to exist on network before proceeding
+    await waitForAccountToExist(adiResult.adiUrl, 30, 1000);
+
     // Step 4: Add credits to the keypage
     const creditsAmount = parseInt(process.env.ONBOARDING_CREDITS_AMOUNT || '10000');
     const acmeForCredits = creditsAmount / 100; // Credits = ACME * 100
@@ -1895,6 +1964,10 @@ app.post('/api/v1/onboarding/create-adi', async (req, res) => {
     );
 
     console.log(`✅ Credits added: ${creditsResult.txId}`);
+
+    // Wait for credits to appear on keypage before creating data account
+    // Credits are stored as creditBalance * 100 on the network
+    await waitForKeyPageCredits(adiResult.keyPageUrl, creditsAmount * 100, 30, 1000);
 
     // Step 5: Create data account
     console.log(`📄 Step 3/4: Creating data account...`);
