@@ -10,6 +10,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { ethers } from 'ethers';
 import { AccumulateService } from './AccumulateService.js';
 import { AdiStorageService } from './AdiStorageService.js';
 import { CertenIntentService, CreateIntentRequest } from './CertenIntentService.js';
@@ -2129,6 +2130,463 @@ app.post('/api/v1/onboarding/complete-key-swap', async (req, res) => {
       success: false,
       error: errorCode,
       message: errorMessage
+    });
+  }
+});
+
+// =============================================================================
+// CHAIN VERIFICATION ENDPOINTS - EVM Address Ownership Verification
+// =============================================================================
+
+/**
+ * POST /api/v1/chain/verify-address
+ * Verify EVM address ownership via digital signature (EIP-191)
+ *
+ * This endpoint verifies that a user controls an EVM address by checking
+ * a signed challenge message. The challenge must contain the address, ADI URL,
+ * chain ID, and timestamp.
+ */
+app.post('/api/v1/chain/verify-address', async (req, res) => {
+  try {
+    const { address, chainId, adiUrl, challenge, signature, timestamp } = req.body;
+
+    // Validate required fields
+    if (!address) {
+      return res.status(400).json({
+        success: false,
+        error: 'Address is required'
+      });
+    }
+
+    if (!chainId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Chain ID is required'
+      });
+    }
+
+    if (!adiUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'ADI URL is required'
+      });
+    }
+
+    if (!challenge) {
+      return res.status(400).json({
+        success: false,
+        error: 'Challenge message is required'
+      });
+    }
+
+    if (!signature) {
+      return res.status(400).json({
+        success: false,
+        error: 'Signature is required'
+      });
+    }
+
+    if (!timestamp) {
+      return res.status(400).json({
+        success: false,
+        error: 'Timestamp is required'
+      });
+    }
+
+    // Validate timestamp is not too old (5 minute window)
+    const now = Math.floor(Date.now() / 1000);
+    const maxAge = 5 * 60; // 5 minutes
+    if (now - timestamp > maxAge) {
+      return res.status(400).json({
+        success: false,
+        error: 'Challenge has expired. Please generate a new challenge.',
+        verified: false
+      });
+    }
+
+    // Validate address format (EVM address)
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid EVM address format. Must be 0x followed by 40 hex characters.'
+      });
+    }
+
+    // Validate signature format (65-byte hex with 0x prefix)
+    if (!/^0x[0-9a-fA-F]{130}$/.test(signature)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid signature format. Must be 0x followed by 130 hex characters (65 bytes).'
+      });
+    }
+
+    // Validate challenge format contains expected fields
+    const expectedChallengePattern = new RegExp(
+      `I am linking address ${address.toLowerCase()} to ADI ${adiUrl} on chain ${chainId} at ${timestamp}`,
+      'i'
+    );
+    if (!expectedChallengePattern.test(challenge.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        error: 'Challenge message format is invalid or does not match provided parameters.'
+      });
+    }
+
+    console.log(`🔐 Verifying address ownership:`);
+    console.log(`   Address: ${address}`);
+    console.log(`   Chain: ${chainId}`);
+    console.log(`   ADI: ${adiUrl}`);
+    console.log(`   Timestamp: ${timestamp}`);
+
+    // Import ethers for signature verification
+    const { ethers } = await import('ethers');
+
+    // Recover the address from the signature using EIP-191 personal sign
+    let recoveredAddress: string;
+    try {
+      recoveredAddress = ethers.verifyMessage(challenge, signature);
+    } catch (sigError) {
+      console.error('❌ Signature recovery failed:', sigError);
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        error: 'Failed to recover address from signature. Invalid signature format.',
+        address: address,
+        recoveredAddress: null
+      });
+    }
+
+    // Compare recovered address with claimed address (case-insensitive)
+    const verified = recoveredAddress.toLowerCase() === address.toLowerCase();
+
+    if (verified) {
+      console.log(`✅ Address verified successfully: ${address}`);
+    } else {
+      console.log(`❌ Address verification failed:`);
+      console.log(`   Claimed: ${address}`);
+      console.log(`   Recovered: ${recoveredAddress}`);
+    }
+
+    res.json({
+      success: true,
+      verified,
+      address: address,
+      recoveredAddress: recoveredAddress,
+      chainId: chainId,
+      adiUrl: adiUrl,
+      message: verified
+        ? 'Address ownership verified successfully'
+        : `Signature verification failed. Recovered address (${recoveredAddress}) does not match claimed address (${address})`
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to verify address:', error);
+    res.status(500).json({
+      success: false,
+      verified: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// =============================================================================
+// EVM SPONSORED ACCOUNT DEPLOYMENT
+// =============================================================================
+
+// CertenAccountFactory ABI (minimal - only what we need)
+const ACCOUNT_FACTORY_ABI = [
+  {
+    inputs: [
+      { internalType: 'address', name: 'owner', type: 'address' },
+      { internalType: 'string', name: 'adiURL', type: 'string' },
+      { internalType: 'uint256', name: 'salt', type: 'uint256' }
+    ],
+    name: 'createAccountIfNotExists',
+    outputs: [
+      { internalType: 'address', name: 'account', type: 'address' }
+    ],
+    stateMutability: 'payable',
+    type: 'function'
+  },
+  {
+    inputs: [
+      { internalType: 'address', name: 'owner', type: 'address' },
+      { internalType: 'string', name: 'adiURL', type: 'string' },
+      { internalType: 'uint256', name: 'salt', type: 'uint256' }
+    ],
+    name: 'getAddress',
+    outputs: [
+      { internalType: 'address', name: 'accountAddress', type: 'address' }
+    ],
+    stateMutability: 'view',
+    type: 'function'
+  },
+  {
+    inputs: [
+      { internalType: 'address', name: 'account', type: 'address' }
+    ],
+    name: 'isDeployedAccount',
+    outputs: [
+      { internalType: 'bool', name: '', type: 'bool' }
+    ],
+    stateMutability: 'view',
+    type: 'function'
+  }
+];
+
+// Chain configuration for EVM networks
+const EVM_CHAIN_CONFIG: Record<string, { rpcUrl: string; factoryAddress: string; explorerUrl: string; name: string }> = {
+  'sepolia': {
+    rpcUrl: process.env.EVM_SEPOLIA_RPC_URL || 'https://sepolia.infura.io/v3/YOUR_KEY',
+    factoryAddress: process.env.EVM_SEPOLIA_ACCOUNT_FACTORY || '0xbd9D33310358C8A10254175dD297e2CA8cd623c3',
+    explorerUrl: 'https://sepolia.etherscan.io',
+    name: 'Sepolia Testnet'
+  }
+  // Add more chains as needed:
+  // 'ethereum': { ... },
+  // 'polygon': { ... },
+};
+
+/**
+ * POST /api/v1/chain/deploy-account
+ *
+ * Deploys a Certen Abstract Account for a user on an EVM chain.
+ * Gas fees are sponsored by Certen - users don't need tokens on the target chain.
+ *
+ * Request body:
+ * - ownerAddress: The EVM address that will own the account (0x...)
+ * - adiUrl: The Accumulate ADI URL (acc://...)
+ * - chainId: The target blockchain (e.g., "sepolia")
+ * - challenge: The signed challenge message
+ * - signature: The EIP-191 signature proving address ownership
+ * - timestamp: When the challenge was generated
+ */
+app.post('/api/v1/chain/deploy-account', async (req, res) => {
+  console.log('\n📦 POST /api/v1/chain/deploy-account');
+
+  try {
+    const { ownerAddress, adiUrl, chainId, challenge, signature, timestamp } = req.body;
+
+    // Validate required fields
+    if (!ownerAddress || !adiUrl || !chainId || !challenge || !signature || !timestamp) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: ownerAddress, adiUrl, chainId, challenge, signature, timestamp'
+      });
+    }
+
+    // Check if sponsored deployment is enabled
+    if (process.env.EVM_SPONSORED_DEPLOYMENT_ENABLED !== 'true') {
+      return res.status(503).json({
+        success: false,
+        error: 'Sponsored deployment is currently disabled'
+      });
+    }
+
+    // Check if we support this chain
+    const chainConfig = EVM_CHAIN_CONFIG[chainId.toLowerCase()];
+    if (!chainConfig) {
+      return res.status(400).json({
+        success: false,
+        error: `Unsupported chain: ${chainId}. Supported chains: ${Object.keys(EVM_CHAIN_CONFIG).join(', ')}`
+      });
+    }
+
+    console.log(`  Chain: ${chainConfig.name} (${chainId})`);
+    console.log(`  Owner: ${ownerAddress}`);
+    console.log(`  ADI: ${adiUrl}`);
+
+    // Verify the signature proves address ownership
+    console.log('  Verifying address ownership...');
+    let recoveredAddress: string;
+    try {
+      recoveredAddress = ethers.verifyMessage(challenge, signature);
+    } catch (sigError) {
+      console.log('  ❌ Invalid signature format');
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid signature format'
+      });
+    }
+
+    if (recoveredAddress.toLowerCase() !== ownerAddress.toLowerCase()) {
+      console.log(`  ❌ Signature mismatch: expected ${ownerAddress}, got ${recoveredAddress}`);
+      return res.status(400).json({
+        success: false,
+        error: 'Signature does not match owner address',
+        recoveredAddress
+      });
+    }
+    console.log('  ✅ Address ownership verified');
+
+    // Validate timestamp (not too old - 10 minute window)
+    const now = Math.floor(Date.now() / 1000);
+    const maxAge = 10 * 60; // 10 minutes
+    if (now - timestamp > maxAge) {
+      console.log('  ❌ Challenge expired');
+      return res.status(400).json({
+        success: false,
+        error: 'Challenge has expired. Please generate a new challenge.'
+      });
+    }
+
+    // Get sponsor wallet
+    const sponsorPrivateKey = process.env.EVM_SPONSOR_PRIVATE_KEY;
+    if (!sponsorPrivateKey) {
+      console.error('  ❌ Sponsor wallet not configured');
+      return res.status(503).json({
+        success: false,
+        error: 'Sponsor wallet not configured'
+      });
+    }
+
+    // Connect to the chain
+    console.log(`  Connecting to ${chainConfig.name}...`);
+    const provider = new ethers.JsonRpcProvider(chainConfig.rpcUrl);
+    const sponsorWallet = new ethers.Wallet(sponsorPrivateKey, provider);
+
+    // Check sponsor balance
+    const sponsorBalance = await provider.getBalance(sponsorWallet.address);
+    const minBalance = ethers.parseEther(process.env.EVM_SPONSOR_MIN_BALANCE || '0.01');
+    console.log(`  Sponsor balance: ${ethers.formatEther(sponsorBalance)} ETH`);
+
+    if (sponsorBalance < minBalance) {
+      console.error('  ❌ Sponsor wallet balance too low');
+      return res.status(503).json({
+        success: false,
+        error: 'Sponsor wallet balance too low. Please contact support.'
+      });
+    }
+
+    // Create contract instance
+    const factory = new ethers.Contract(
+      chainConfig.factoryAddress,
+      ACCOUNT_FACTORY_ABI,
+      sponsorWallet
+    );
+
+    // Calculate the deterministic address first
+    // Use a salt derived from the ADI URL for deterministic addresses
+    const salt = BigInt(ethers.keccak256(ethers.toUtf8Bytes(adiUrl)));
+
+    // Check if account already exists
+    const predictedAddress = await factory.getAddress(ownerAddress, adiUrl, salt);
+    const alreadyDeployed = await factory.isDeployedAccount(predictedAddress);
+
+    if (alreadyDeployed) {
+      console.log(`  ℹ️ Account already deployed at ${predictedAddress}`);
+      return res.json({
+        success: true,
+        accountAddress: predictedAddress,
+        alreadyExisted: true,
+        transactionHash: null,
+        explorerUrl: `${chainConfig.explorerUrl}/address/${predictedAddress}`,
+        message: 'Certen Abstract Account already exists at this address'
+      });
+    }
+
+    // Deploy the account
+    console.log('  Deploying Certen Abstract Account...');
+    console.log(`  Predicted address: ${predictedAddress}`);
+
+    const tx = await factory.createAccountIfNotExists(ownerAddress, adiUrl, salt);
+    console.log(`  Transaction sent: ${tx.hash}`);
+
+    // Wait for confirmation
+    console.log('  Waiting for confirmation...');
+    const receipt = await tx.wait();
+
+    if (receipt.status !== 1) {
+      console.error('  ❌ Transaction failed');
+      return res.status(500).json({
+        success: false,
+        error: 'Transaction failed',
+        transactionHash: tx.hash
+      });
+    }
+
+    console.log(`  ✅ Account deployed successfully!`);
+    console.log(`  Account address: ${predictedAddress}`);
+    console.log(`  Gas used: ${receipt.gasUsed.toString()}`);
+
+    res.json({
+      success: true,
+      accountAddress: predictedAddress,
+      alreadyExisted: false,
+      transactionHash: tx.hash,
+      explorerUrl: `${chainConfig.explorerUrl}/tx/${tx.hash}`,
+      gasUsed: receipt.gasUsed.toString(),
+      message: 'Certen Abstract Account deployed successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to deploy account:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * GET /api/v1/chain/sponsor-status
+ *
+ * Returns the status of the sponsor wallet for EVM chains.
+ * Useful for checking if sponsored deployments are available.
+ */
+app.get('/api/v1/chain/sponsor-status', async (req, res) => {
+  console.log('\n📊 GET /api/v1/chain/sponsor-status');
+
+  try {
+    const enabled = process.env.EVM_SPONSORED_DEPLOYMENT_ENABLED === 'true';
+    const sponsorAddress = process.env.EVM_SPONSOR_ADDRESS;
+
+    if (!enabled || !sponsorAddress) {
+      return res.json({
+        success: true,
+        enabled: false,
+        message: 'Sponsored deployment is disabled'
+      });
+    }
+
+    // Get balances for each supported chain
+    const chainStatuses: Record<string, any> = {};
+
+    for (const [chainId, config] of Object.entries(EVM_CHAIN_CONFIG)) {
+      try {
+        const provider = new ethers.JsonRpcProvider(config.rpcUrl);
+        const balance = await provider.getBalance(sponsorAddress);
+        const minBalance = ethers.parseEther(process.env.EVM_SPONSOR_MIN_BALANCE || '0.01');
+
+        chainStatuses[chainId] = {
+          name: config.name,
+          balance: ethers.formatEther(balance),
+          minBalance: ethers.formatEther(minBalance),
+          available: balance >= minBalance,
+          factoryAddress: config.factoryAddress
+        };
+      } catch (chainError) {
+        chainStatuses[chainId] = {
+          name: config.name,
+          error: 'Failed to connect to chain',
+          available: false
+        };
+      }
+    }
+
+    res.json({
+      success: true,
+      enabled: true,
+      sponsorAddress,
+      chains: chainStatuses,
+      supportedChains: Object.keys(EVM_CHAIN_CONFIG)
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get sponsor status:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });
