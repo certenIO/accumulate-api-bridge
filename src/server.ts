@@ -2355,28 +2355,39 @@ const EVM_CHAIN_CONFIG: Record<string, { rpcUrl: string; factoryAddress: string;
 /**
  * POST /api/v1/chain/deploy-account
  *
- * Deploys a Certen Abstract Account for a user on an EVM chain.
- * Gas fees are sponsored by Certen - users don't need tokens on the target chain.
+ * Deploys a Certen Abstract Account for an ADI on an EVM chain.
+ * The abstract account address is deterministically derived from the ADI URL.
+ * Gas fees are sponsored by Certen - users don't need tokens or keys on target chains.
+ *
+ * This is the core of Certen's cross-chain identity:
+ * - User has ONE identity (their Accumulate ADI)
+ * - User has ONE set of keys (managed in Key Vault)
+ * - Abstract accounts on EVM chains are controlled by ADI governance
+ * - NO separate EOA or keys needed per chain
  *
  * Request body:
- * - ownerAddress: The EVM address that will own the account (0x...)
  * - adiUrl: The Accumulate ADI URL (acc://...)
- * - chainId: The target blockchain (e.g., "sepolia")
- * - challenge: The signed challenge message
- * - signature: The EIP-191 signature proving address ownership
- * - timestamp: When the challenge was generated
+ * - chainId: The target blockchain (e.g., "sepolia", "11155111")
  */
 app.post('/api/v1/chain/deploy-account', async (req, res) => {
   console.log('\n📦 POST /api/v1/chain/deploy-account');
 
   try {
-    const { ownerAddress, adiUrl, chainId, challenge, signature, timestamp } = req.body;
+    const { adiUrl, chainId } = req.body;
 
     // Validate required fields
-    if (!ownerAddress || !adiUrl || !chainId || !challenge || !signature || !timestamp) {
+    if (!adiUrl || !chainId) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: ownerAddress, adiUrl, chainId, challenge, signature, timestamp'
+        error: 'Missing required fields: adiUrl, chainId'
+      });
+    }
+
+    // Validate ADI URL format
+    if (!adiUrl.startsWith('acc://')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid ADI URL format. Must start with acc://'
       });
     }
 
@@ -2389,7 +2400,7 @@ app.post('/api/v1/chain/deploy-account', async (req, res) => {
     }
 
     // Check if we support this chain
-    const chainConfig = EVM_CHAIN_CONFIG[chainId.toLowerCase()];
+    const chainConfig = EVM_CHAIN_CONFIG[chainId.toLowerCase()] || EVM_CHAIN_CONFIG[chainId];
     if (!chainConfig) {
       return res.status(400).json({
         success: false,
@@ -2398,42 +2409,13 @@ app.post('/api/v1/chain/deploy-account', async (req, res) => {
     }
 
     console.log(`  Chain: ${chainConfig.name} (${chainId})`);
-    console.log(`  Owner: ${ownerAddress}`);
     console.log(`  ADI: ${adiUrl}`);
 
-    // Verify the signature proves address ownership
-    console.log('  Verifying address ownership...');
-    let recoveredAddress: string;
-    try {
-      recoveredAddress = ethers.verifyMessage(challenge, signature);
-    } catch (sigError) {
-      console.log('  ❌ Invalid signature format');
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid signature format'
-      });
-    }
-
-    if (recoveredAddress.toLowerCase() !== ownerAddress.toLowerCase()) {
-      console.log(`  ❌ Signature mismatch: expected ${ownerAddress}, got ${recoveredAddress}`);
-      return res.status(400).json({
-        success: false,
-        error: 'Signature does not match owner address',
-        recoveredAddress
-      });
-    }
-    console.log('  ✅ Address ownership verified');
-
-    // Validate timestamp (not too old - 10 minute window)
-    const now = Math.floor(Date.now() / 1000);
-    const maxAge = 10 * 60; // 10 minutes
-    if (now - timestamp > maxAge) {
-      console.log('  ❌ Challenge expired');
-      return res.status(400).json({
-        success: false,
-        error: 'Challenge has expired. Please generate a new challenge.'
-      });
-    }
+    // Derive deterministic "owner" address from ADI URL
+    // This ensures the same ADI always gets the same abstract account address
+    const adiHash = ethers.keccak256(ethers.toUtf8Bytes(adiUrl));
+    const ownerAddress = ethers.getAddress('0x' + adiHash.slice(-40));
+    console.log(`  Derived owner: ${ownerAddress}`);
 
     // Get sponsor wallet
     const sponsorPrivateKey = process.env.EVM_SPONSOR_PRIVATE_KEY;
@@ -2526,6 +2508,94 @@ app.post('/api/v1/chain/deploy-account', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Failed to deploy account:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * GET /api/v1/chain/account-address
+ *
+ * Returns the predicted abstract account address for an ADI on a chain.
+ * This allows the UI to show the user their address before deployment.
+ *
+ * Query params:
+ * - adiUrl: The Accumulate ADI URL (acc://...)
+ * - chainId: The target blockchain (e.g., "sepolia")
+ */
+app.get('/api/v1/chain/account-address', async (req, res) => {
+  console.log('\n🔍 GET /api/v1/chain/account-address');
+
+  try {
+    const { adiUrl, chainId } = req.query;
+
+    if (!adiUrl || !chainId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required query params: adiUrl, chainId'
+      });
+    }
+
+    const adiUrlStr = adiUrl as string;
+    const chainIdStr = chainId as string;
+
+    // Validate ADI URL format
+    if (!adiUrlStr.startsWith('acc://')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid ADI URL format. Must start with acc://'
+      });
+    }
+
+    // Check if we support this chain
+    const chainConfig = EVM_CHAIN_CONFIG[chainIdStr.toLowerCase()] || EVM_CHAIN_CONFIG[chainIdStr];
+    if (!chainConfig) {
+      return res.status(400).json({
+        success: false,
+        error: `Unsupported chain: ${chainIdStr}. Supported chains: ${Object.keys(EVM_CHAIN_CONFIG).join(', ')}`
+      });
+    }
+
+    // Derive deterministic "owner" address from ADI URL
+    const adiHash = ethers.keccak256(ethers.toUtf8Bytes(adiUrlStr));
+    const ownerAddress = ethers.getAddress('0x' + adiHash.slice(-40));
+
+    // Connect to chain and get predicted address from factory
+    const provider = new ethers.JsonRpcProvider(chainConfig.rpcUrl);
+    const factory = new ethers.Contract(
+      chainConfig.factoryAddress,
+      ACCOUNT_FACTORY_ABI,
+      provider
+    ) as any;
+
+    // Salt derived from ADI URL for deterministic addresses
+    const salt = BigInt(ethers.keccak256(ethers.toUtf8Bytes(adiUrlStr)));
+
+    // Get predicted address
+    const predictedAddress: string = await factory.getAddress(ownerAddress, adiUrlStr, salt);
+
+    // Check if already deployed
+    const isDeployed: boolean = await factory.isDeployedAccount(predictedAddress);
+
+    console.log(`  ADI: ${adiUrlStr}`);
+    console.log(`  Chain: ${chainConfig.name}`);
+    console.log(`  Address: ${predictedAddress}`);
+    console.log(`  Deployed: ${isDeployed}`);
+
+    res.json({
+      success: true,
+      adiUrl: adiUrlStr,
+      chainId: chainIdStr,
+      chainName: chainConfig.name,
+      accountAddress: predictedAddress,
+      isDeployed,
+      explorerUrl: `${chainConfig.explorerUrl}/address/${predictedAddress}`
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get account address:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
