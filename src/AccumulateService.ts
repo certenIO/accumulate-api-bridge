@@ -1371,7 +1371,12 @@ export class AccumulateService {
       let tokenBalance = 0;
       try {
         const tokenResult = await this.client.query(ltaUrl);
-        tokenBalance = parseInt(tokenResult?.account?.balance || '0');
+        tokenBalance = parseInt(tokenResult?.data?.balance || tokenResult?.account?.balance || '0');
+        this.logger.info('📊 LTA query result', {
+          ltaUrl,
+          balance: tokenBalance,
+          rawData: tokenResult?.data || tokenResult?.account
+        });
       } catch (error) {
         this.logger.warn('Could not query LTA balance', { error });
       }
@@ -1380,7 +1385,12 @@ export class AccumulateService {
       let creditBalance = 0;
       try {
         const creditResult = await this.client.query(lidUrl);
-        creditBalance = parseInt(creditResult?.account?.creditBalance || '0');
+        creditBalance = parseInt(creditResult?.data?.creditBalance || creditResult?.account?.creditBalance || '0');
+        this.logger.info('📊 LID query result', {
+          lidUrl,
+          creditBalance,
+          rawData: creditResult?.data || creditResult?.account
+        });
       } catch (error) {
         this.logger.warn('Could not query LID balance', { error });
       }
