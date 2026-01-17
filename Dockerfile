@@ -40,7 +40,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8085/health || exit 1
 
 # Environment defaults for Kermit Testnet
-ENV ACCUM_ENDPOINT=http://206.191.154.164/v3
+ENV ACCUM_ENDPOINT=http://206.191.154.164:8660/v3
 ENV ACCUM_ENDPOINT_V2=http://206.191.154.164/v2
 ENV PORT=8085
 ENV ACCUMULATE_SDK_PATH=/app/typescript-sdk-accumulate
