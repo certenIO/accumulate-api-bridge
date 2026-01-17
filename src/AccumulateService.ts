@@ -357,12 +357,14 @@ export class AccumulateService {
 
   async getBalance(accountUrl: string): Promise<any> {
     try {
-      const account = await this.client.query(accountUrl);
+      const result = await this.client.query(accountUrl);
+      // SDK may return account data in .account or .data property
+      const accountData = result.account || result.data;
       return {
         url: accountUrl,
-        balance: account.data?.balance || account.data?.creditBalance || '0',
-        accountType: account.data?.type || 'unknown',
-        account: account.data
+        balance: accountData?.balance || accountData?.creditBalance || '0',
+        accountType: accountData?.type || 'unknown',
+        account: accountData
       };
     } catch (error) {
       this.logger.error('❌ Failed to get balance', { error: error instanceof Error ? error.message : String(error) });
@@ -1381,15 +1383,21 @@ export class AccumulateService {
         this.logger.warn('Could not query LTA balance', { error: error instanceof Error ? error.message : String(error) });
       }
 
-      // Get credit balance from LID - credits are at data.creditBalance
+      // Get credit balance from LID - SDK may return account or data property
       let creditBalance = 0;
       try {
         const creditResult = await this.client.query(lidUrl);
-        creditBalance = parseInt(creditResult?.data?.creditBalance || '0');
+        // Handle both SDK response structures
+        creditBalance = parseInt(
+          creditResult?.account?.creditBalance ||
+          creditResult?.data?.creditBalance ||
+          '0'
+        );
         this.logger.info('📊 LID credit balance result', {
           lidUrl,
           creditBalance,
-          accountType: creditResult?.data?.type
+          accountType: creditResult?.account?.type || creditResult?.data?.type,
+          resultKeys: Object.keys(creditResult || {})
         });
       } catch (error) {
         this.logger.warn('Could not query LID credit balance', { error: error instanceof Error ? error.message : String(error) });
