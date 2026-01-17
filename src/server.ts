@@ -2335,16 +2335,21 @@ const ACCOUNT_FACTORY_ABI = [
 ];
 
 // Chain configuration for EVM networks
+// Supports both chain names (e.g., "sepolia") and numeric chain IDs (e.g., "11155111")
+const SEPOLIA_CONFIG = {
+  rpcUrl: process.env.EVM_SEPOLIA_RPC_URL || 'https://sepolia.infura.io/v3/YOUR_KEY',
+  factoryAddress: process.env.EVM_SEPOLIA_ACCOUNT_FACTORY || '0xbd9D33310358C8A10254175dD297e2CA8cd623c3',
+  explorerUrl: 'https://sepolia.etherscan.io',
+  name: 'Sepolia Testnet'
+};
+
 const EVM_CHAIN_CONFIG: Record<string, { rpcUrl: string; factoryAddress: string; explorerUrl: string; name: string }> = {
-  'sepolia': {
-    rpcUrl: process.env.EVM_SEPOLIA_RPC_URL || 'https://sepolia.infura.io/v3/YOUR_KEY',
-    factoryAddress: process.env.EVM_SEPOLIA_ACCOUNT_FACTORY || '0xbd9D33310358C8A10254175dD297e2CA8cd623c3',
-    explorerUrl: 'https://sepolia.etherscan.io',
-    name: 'Sepolia Testnet'
-  }
+  // Sepolia - by name and chain ID
+  'sepolia': SEPOLIA_CONFIG,
+  '11155111': SEPOLIA_CONFIG,
   // Add more chains as needed:
-  // 'ethereum': { ... },
-  // 'polygon': { ... },
+  // 'ethereum': ETHEREUM_CONFIG,
+  // '1': ETHEREUM_CONFIG,
 };
 
 /**
