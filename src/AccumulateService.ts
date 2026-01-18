@@ -1185,7 +1185,9 @@ export class AccumulateService {
 
       // Construct signature object manually
       // This matches the structure created by signer.sign()
+      // IMPORTANT: The 'type' field is required by the SDK to identify the signature type
       const sigObject = {
+        type: 'ed25519',  // Required! SDK throws "Unknown signature 'undefined'" without this
         signature: signatureBytes,
         publicKey: publicKeyBytes,
         signer: prepared.signerKeyPageUrl,
