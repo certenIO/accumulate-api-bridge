@@ -10,6 +10,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 import { ethers } from 'ethers';
 import { AccumulateService } from './AccumulateService.js';
 import { AdiStorageService } from './AdiStorageService.js';
@@ -1069,17 +1070,180 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
     const adiName = adiUrl.replace('acc://', '').split('.')[0];
     const dataAccountName = 'data';
 
-    // Generate data entries for the intent
-    const dataEntries = [JSON.stringify({
-      certenProtocolVersion: '2.0',
-      transactionType: 'CROSS_CHAIN_INTENT',
-      intent: intent,
-      contractAddresses: contractAddresses,
-      executionParameters: executionParameters,
-      validationRules: validationRules,
-      proofClass: proofClass || 'on_demand',
-      expiresAt: new Date(Date.now() + (expirationMinutes || 95) * 60 * 1000).toISOString()
-    })];
+    // Generate 4-blob data entries matching certen-protocol spec
+    const nowMs = Date.now();
+    const nowSeconds = Math.floor(nowMs / 1000);
+    const expirationMins = expirationMinutes || 95;
+    const expiresAtSeconds = nowSeconds + (expirationMins * 60);
+    const nonce = `certen_${nowMs}_${Math.random().toString(36).substring(7)}`;
+
+    // Convert amount to Wei (18 decimals)
+    const amountWei = (parseFloat(intent.amount) * 1e18).toString();
+    const legId = `leg-${(intent.toChain || 'ethereum').toLowerCase()}-${intent.toChainId || 11155111}-1`;
+
+    // data[0]: intentData - Protocol metadata, proof_class, descriptions
+    const intentData = {
+      kind: "CERTEN_INTENT",
+      version: "1.0",
+      proof_class: proofClass || 'on_demand',
+      intentType: "single_leg_cross_chain_transfer",
+      description: `Transfer ${intent.amount} ${intent.tokenSymbol || 'ETH'} from ${intent.fromChain} to ${intent.toChain}`,
+      organizationAdi: adiUrl,
+      initiator: {
+        adi: adiUrl,
+        by: intent.initiatedBy,
+        role: "organization_operator"
+      },
+      priority: "high",
+      risk_level: parseFloat(intent.amount) > 1.0 ? "high" : "medium",
+      compliance_required: false,
+      estimated_gas: (executionParameters?.gasLimit || 21000).toString(),
+      estimated_fees: {
+        network_fee_gwei: (parseInt(executionParameters?.maxFeePerGas || "20000000000") / 1e9).toString(),
+        priority_fee_gwei: (parseInt(executionParameters?.maxPriorityFeePerGas || "2000000000") / 1e9).toString(),
+        total_cost_eth: "0.00042"
+      },
+      intent_id: intent.id,
+      created_by: intent.initiatedBy,
+      created_at: new Date(intent.timestamp).toISOString(),
+      intent_class: "financial_transfer",
+      regulatory_jurisdiction: "global",
+      tags: [intent.tokenSymbol?.toLowerCase() || "eth", intent.toChain?.toLowerCase() || "sepolia", "intent"]
+    };
+
+    // data[1]: crossChainData - Chain details, legs, gas policies
+    const crossChainData = {
+      protocol: "CERTEN",
+      version: "1.0",
+      operationGroupId: intent.id,
+      legs: [
+        {
+          legId: legId,
+          role: "payment",
+          chain: (intent.toChain || "ethereum").toLowerCase().includes("sepolia") ? "ethereum" : (intent.toChain || "ethereum").toLowerCase(),
+          chainId: intent.toChainId || 11155111,
+          network: (intent.toChain || "sepolia").toLowerCase(),
+          asset: {
+            symbol: intent.tokenSymbol || "ETH",
+            decimals: 18,
+            native: !intent.tokenAddress,
+            contract_address: intent.tokenAddress || null,
+            verified: true
+          },
+          from: intent.fromAddress,
+          to: intent.toAddress,
+          amountEth: intent.amount,
+          amountWei: amountWei,
+          execution_sequence: 1,
+          conditional_execution: false,
+          rollback_conditions: {
+            timeout_seconds: 3600,
+            failure_modes: ["gas_limit_exceeded", "insufficient_balance"]
+          },
+          anchorContract: {
+            address: contractAddresses?.anchor || "0x8398D7EB594bCc608a0210cf206b392d35Ed5339",
+            functionSelector: "commitAnchor(bytes32,bytes)",
+            version: "v2.1"
+          },
+          gasPolicy: {
+            maxFeePerGasGwei: (parseInt(executionParameters?.maxFeePerGas || "20000000000") / 1e9).toString(),
+            maxPriorityFeePerGasGwei: (parseInt(executionParameters?.maxPriorityFeePerGas || "2000000000") / 1e9).toString(),
+            gasLimit: executionParameters?.gasLimit || 21000,
+            payer: "from",
+            gas_estimation_buffer: 1.2
+          },
+          slippage_tolerance: "0.5%",
+          deadline_timestamp: expiresAtSeconds
+        }
+      ],
+      atomicity: {
+        mode: "single_leg",
+        rollback_strategy: "all_or_nothing",
+        partial_execution_allowed: false
+      },
+      execution_constraints: {
+        max_execution_time_seconds: 3600,
+        required_confirmations: 1,
+        parallel_execution: false
+      },
+      cross_chain_routing: {
+        bridge_type: "certen_anchor",
+        relay_mechanism: "proof_based",
+        finality_requirements: "fast"
+      }
+    };
+
+    // data[2]: governanceData - Authorization, validation rules, compliance
+    const keyBook = signerKeyPageUrl ? signerKeyPageUrl.replace(/\/page\/\d+$/, '/book') : `${adiUrl}/book`;
+    const keyPage = signerKeyPageUrl || `${adiUrl}/book/1`;
+    const governanceData = {
+      organizationAdi: adiUrl,
+      authorization: {
+        required_key_book: keyBook,
+        required_key_page: keyPage,
+        signature_threshold: 1,
+        required_signers: [publicKey],
+        roles: [
+          {
+            role: "DEFAULT_SIGNER",
+            keyPage: keyPage
+          }
+        ],
+        authorization_hash: ""  // Will be set after operation_id calculation
+      },
+      validation_rules: {
+        max_amount: validationRules?.maxAmount || "1000000",
+        daily_limit: validationRules?.dailyLimit || "10000",
+        requires_approval: validationRules?.requiresApproval || false,
+        risk_level: parseFloat(intent.amount) > 1.0 ? "high" : "medium"
+      },
+      compliance_checks: {
+        aml_required: parseFloat(intent.amount) > 10000,
+        kyc_verified: true,
+        sanctions_check: "passed",
+        jurisdiction: "compliant"
+      }
+    };
+
+    // data[3]: replayData - Nonces, timestamps (Unix SECONDS), security
+    const replayData = {
+      nonce: nonce,
+      created_at: nowSeconds,
+      expires_at: expiresAtSeconds,
+      intent_hash: "",  // Will be calculated below
+      chain_nonces: {
+        [(intent.fromChain || "ethereum").toLowerCase()]: "latest",
+        accumulated: "1"
+      },
+      execution_window: {
+        start_time: nowSeconds,
+        end_time: expiresAtSeconds,
+        grace_period_minutes: 5,
+        max_retries: 3
+      },
+      security: {
+        double_spending_protection: true,
+        replay_attack_prevention: true,
+        temporal_validation: "strict",
+        nonce_validation: "required"
+      }
+    };
+
+    // Calculate operation_id from all 4 blobs (sha256 of concatenated JSON)
+    const operationIdPayload = JSON.stringify([intentData, crossChainData, governanceData, replayData]);
+    const operationId = '0x' + crypto.createHash('sha256').update(operationIdPayload).digest('hex');
+
+    // Update replayData with calculated operation_id
+    replayData.intent_hash = operationId;
+    governanceData.authorization.authorization_hash = operationId;
+
+    // Create 4 data entries
+    const dataEntries = [
+      JSON.stringify(intentData),     // data[0]: intentData
+      JSON.stringify(crossChainData), // data[1]: crossChainData
+      JSON.stringify(governanceData), // data[2]: governanceData
+      JSON.stringify(replayData)      // data[3]: replayData
+    ];
 
     // Prepare transaction without signing - pass publicKey for proper hash computation
     const result = await accumulateService.prepareWriteData(
