@@ -1358,8 +1358,9 @@ export class AccumulateService {
         accountVersion: keyPageQuery.account?.version
       });
 
-      // Get version from data.version, fallback to 1 if not present
-      const version = keyPageQuery.data?.version !== undefined ? keyPageQuery.data.version : 1;
+      // Get version from account.version (primary) or data.version (fallback), default to 1
+      // Note: The query returns version in account.version, not data.version
+      const version = keyPageQuery.account?.version ?? keyPageQuery.data?.version ?? 1;
 
       // Extract lastUsedOn from the key page structure
       let lastUsedOn = 0;
