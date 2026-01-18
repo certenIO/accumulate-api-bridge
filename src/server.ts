@@ -1031,14 +1031,15 @@ app.post('/api/v1/intent/create', async (req, res) => {
  */
 app.post('/api/v1/intent/prepare', async (req, res) => {
   try {
-    const { intent, contractAddresses, executionParameters, validationRules, expirationMinutes, signerKeyPageUrl, proofClass } = req.body;
+    const { intent, contractAddresses, executionParameters, validationRules, expirationMinutes, signerKeyPageUrl, proofClass, publicKey } = req.body;
 
     console.log('🎯 Preparing Certen transaction intent (Phase 1 - Two-Phase Signing)', {
       intentId: intent?.id,
       adiUrl: intent?.adiUrl,
       fromChain: intent?.fromChain,
       toChain: intent?.toChain,
-      amount: intent?.amount
+      amount: intent?.amount,
+      hasPublicKey: !!publicKey
     });
 
     // Validate required fields
@@ -1053,6 +1054,13 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Contract addresses are required'
+      });
+    }
+
+    if (!publicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'publicKey is required for two-phase signing (from Key Vault)'
       });
     }
 
@@ -1073,30 +1081,33 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
       expiresAt: new Date(Date.now() + (expirationMinutes || 95) * 60 * 1000).toISOString()
     })];
 
-    // Prepare transaction without signing
+    // Prepare transaction without signing - pass publicKey for proper hash computation
     const result = await accumulateService.prepareWriteData(
       adiName,
       dataAccountName,
       dataEntries,
       signerKeyPageUrl,
       'certen-intent',
-      undefined
+      undefined,
+      publicKey  // Required for computing initiator and proper hash to sign
     );
 
     if (result.success) {
       console.log('✅ Intent preparation successful', {
         requestId: result.requestId,
-        transactionHash: result.transactionHash
+        transactionHash: result.transactionHash,
+        hashToSign: result.hashToSign
       });
 
       res.json({
         success: true,
         requestId: result.requestId,
         transactionHash: result.transactionHash,
+        hashToSign: result.hashToSign,  // THIS is what Key Vault should sign!
         signerKeyPageUrl: result.signerKeyPageUrl,
         keyPageVersion: result.keyPageVersion,
         intentId: intent.id,
-        message: 'Transaction prepared. Sign the transactionHash with Key Vault and call /api/v1/intent/submit-signed'
+        message: 'Transaction prepared. Sign the hashToSign with Key Vault and call /api/v1/intent/submit-signed'
       });
     } else {
       res.status(500).json({

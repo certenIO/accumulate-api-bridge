@@ -9,6 +9,8 @@ let Signer: any;
 let TransactionType: any;
 let Transaction: any;
 let Envelope: any;
+let encode: any;  // For encoding signature metadata
+let sha256: any;  // For hashing
 
 import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
@@ -102,6 +104,14 @@ export class AccumulateService {
         // @ts-ignore: Optional method may not exist
         encodable.setIndexModule(encodingIndex);
       }
+
+      // Store encode function for two-phase signing
+      encode = encodingIndex.encode;
+
+      // Load sha256 from common module
+      // @ts-ignore: Module path determined at runtime
+      const commonModule = await import(`${sdkUrl}/common/index.js`);
+      sha256 = commonModule.sha256;
 
       // Initialize Accumulate clients - Kermit testnet by default
       const endpointV3 = process.env.ACCUM_ENDPOINT || 'http://206.191.154.164/v3';
@@ -1005,6 +1015,9 @@ export class AccumulateService {
   private preparedTransactions = new Map<string, {
     transaction: any;
     transactionHash: string;
+    hashToSign: string;      // The actual hash the Key Vault signs: sha256(sigMdHash + txHash)
+    sigMdHash: string;       // Signature metadata hash (used as initiator)
+    publicKey: string;       // User's public key (hex)
     signerKeyPageUrl: string;
     keyPageVersion: number;
     lastUsedOn: number;
@@ -1023,11 +1036,13 @@ export class AccumulateService {
     dataEntries: string[],
     signerKeyPageUrl?: string,
     memo?: string,
-    metadata?: Buffer
+    metadata?: Buffer,
+    publicKey?: string  // User's public key (hex) for computing initiator
   ): Promise<{
     success: boolean;
     requestId?: string;
     transactionHash?: string;
+    hashToSign?: string;  // The actual hash the Key Vault should sign
     signerKeyPageUrl?: string;
     keyPageVersion?: number;
     error?: string;
@@ -1086,6 +1101,38 @@ export class AccumulateService {
         transactionHeader.metadata = metadata;
       }
 
+      // If public key is provided, compute the proper hash to sign
+      // This is CRITICAL for two-phase signing to work correctly
+      if (!publicKey) {
+        throw new Error('publicKey is required for two-phase signing');
+      }
+
+      const publicKeyBytes = Buffer.from(publicKey.replace(/^0x/, ''), 'hex');
+
+      // Build the signature metadata object (matches SDK's ED25519Signature structure)
+      // The SDK encodes: type, publicKey, signer, signerVersion, timestamp
+      const signatureObject = new core.ED25519Signature({
+        type: 'ed25519',
+        publicKey: publicKeyBytes,
+        signer: finalSignerKeyPageUrl,
+        signerVersion: keyPageInfo.version,
+        timestamp: validMicros,
+      });
+
+      // Compute sigMdHash = sha256(encode(signatureObject))
+      const encodedSig = encode(signatureObject);
+      const sigMdHash = sha256(encodedSig);
+
+      this.logger.info('🔐 Computed signature metadata hash', {
+        sigMdHashHex: Buffer.from(sigMdHash).toString('hex').substring(0, 16) + '...',
+        publicKeyHex: publicKey.substring(0, 16) + '...',
+        signer: finalSignerKeyPageUrl,
+        timestamp: validMicros
+      });
+
+      // Set the initiator in the transaction header BEFORE computing the hash
+      transactionHeader.initiator = sigMdHash;
+
       const transaction = new Transaction({
         header: transactionHeader,
         body: {
@@ -1097,10 +1144,19 @@ export class AccumulateService {
         },
       });
 
-      // Calculate transaction hash
-      // The hash that needs to be signed is typically the transaction body hash
+      // Calculate transaction hash (now includes the initiator)
       const transactionHash = transaction.hash();
-      const transactionHashHex = transactionHash.toString('hex');
+      const transactionHashHex = Buffer.from(transactionHash).toString('hex');
+
+      // Compute the actual hash to sign: sha256(sigMdHash + transactionHash)
+      // This matches the SDK's signing flow in ed25519.ts: signRaw()
+      const hashToSign = sha256(Buffer.concat([Buffer.from(sigMdHash), Buffer.from(transactionHash)]));
+      const hashToSignHex = Buffer.from(hashToSign).toString('hex');
+
+      this.logger.info('🔑 Computed hash to sign', {
+        transactionHashHex: transactionHashHex.substring(0, 16) + '...',
+        hashToSignHex: hashToSignHex.substring(0, 16) + '...'
+      });
 
       // Generate a unique request ID
       const requestId = `prep_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -1109,6 +1165,9 @@ export class AccumulateService {
       this.preparedTransactions.set(requestId, {
         transaction,
         transactionHash: transactionHashHex,
+        hashToSign: hashToSignHex,
+        sigMdHash: Buffer.from(sigMdHash).toString('hex'),
+        publicKey: publicKey,
         signerKeyPageUrl: finalSignerKeyPageUrl,
         keyPageVersion: keyPageInfo.version,
         lastUsedOn: keyPageInfo.lastUsedOn,
@@ -1123,6 +1182,7 @@ export class AccumulateService {
       this.logger.info('✅ Transaction prepared for external signing', {
         requestId,
         transactionHash: transactionHashHex,
+        hashToSign: hashToSignHex,
         signerKeyPageUrl: finalSignerKeyPageUrl,
         keyPageVersion: keyPageInfo.version
       });
@@ -1131,6 +1191,7 @@ export class AccumulateService {
         success: true,
         requestId,
         transactionHash: transactionHashHex,
+        hashToSign: hashToSignHex,  // THIS is what the Key Vault should sign
         signerKeyPageUrl: finalSignerKeyPageUrl,
         keyPageVersion: keyPageInfo.version
       };
