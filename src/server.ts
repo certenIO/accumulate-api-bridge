@@ -2331,6 +2331,15 @@ const ACCOUNT_FACTORY_ABI = [
     ],
     stateMutability: 'view',
     type: 'function'
+  },
+  {
+    inputs: [],
+    name: 'deploymentFee',
+    outputs: [
+      { internalType: 'uint256', name: '', type: 'uint256' }
+    ],
+    stateMutability: 'view',
+    type: 'function'
   }
 ];
 
@@ -2476,7 +2485,11 @@ app.post('/api/v1/chain/deploy-account', async (req, res) => {
     console.log('  Deploying Certen Abstract Account...');
     console.log(`  Predicted address: ${predictedAddress}`);
 
-    const tx = await factory.createAccountIfNotExists(ownerAddress, adiUrl, salt);
+    // Factory requires a deployment fee of 0.001 ETH
+    const deploymentFee = await factory.deploymentFee();
+    console.log(`  Deployment fee: ${ethers.formatEther(deploymentFee)} ETH`);
+
+    const tx = await factory.createAccountIfNotExists(ownerAddress, adiUrl, salt, { value: deploymentFee });
     console.log(`  Transaction sent: ${tx.hash}`);
 
     // Wait for confirmation
