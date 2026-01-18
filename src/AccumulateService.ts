@@ -1297,7 +1297,9 @@ export class AccumulateService {
       const privateKeyHex = fullPrivateKey.substring(0, 64);
       const privateKeyBytes = Buffer.from(privateKeyHex, 'hex');
       const sponsorKey = ED25519Key.from(privateKeyBytes);
-      const sponsorKeyHash = sponsorKey.address.publicKeyHash.toString('hex');
+      // Convert publicKeyHash to hex string (ensure Buffer conversion for proper hex encoding)
+      const publicKeyHashBytes = sponsorKey.address.publicKeyHash;
+      const sponsorKeyHash = Buffer.from(publicKeyHashBytes).toString('hex');
 
       // Create the ADI with sponsor's key
       const transaction = new core.Transaction({
