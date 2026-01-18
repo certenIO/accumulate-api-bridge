@@ -2505,13 +2505,28 @@ app.post('/api/v1/chain/deploy-account', async (req, res) => {
       });
     }
 
+    // Parse the AccountDeployed event to get the actual deployed address
+    // Event signature: AccountDeployed(address indexed account, address indexed owner, ...)
+    // The account address is in topics[1]
+    let deployedAddress = predictedAddress; // Fallback
+    const accountDeployedTopic = '0xf92d8f64e097b6044b318e7dc56258b83e25d40b31866b4af076cf98ae167dee';
+
+    for (const log of receipt.logs) {
+      if (log.topics && log.topics[0] === accountDeployedTopic && log.topics[1]) {
+        // Extract address from topic (remove padding)
+        deployedAddress = '0x' + log.topics[1].slice(-40);
+        console.log(`  📍 Parsed deployed address from event: ${deployedAddress}`);
+        break;
+      }
+    }
+
     console.log(`  ✅ Account deployed successfully!`);
-    console.log(`  Account address: ${predictedAddress}`);
+    console.log(`  Account address: ${deployedAddress}`);
     console.log(`  Gas used: ${receipt.gasUsed.toString()}`);
 
     res.json({
       success: true,
-      accountAddress: predictedAddress,
+      accountAddress: deployedAddress,
       alreadyExisted: false,
       transactionHash: tx.hash,
       explorerUrl: `${chainConfig.explorerUrl}/tx/${tx.hash}`,
