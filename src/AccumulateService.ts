@@ -997,6 +997,262 @@ export class AccumulateService {
     }
   }
 
+  // =============================================================================
+  // TWO-PHASE SIGNING: Prepare + Submit with External Signature
+  // =============================================================================
+
+  // In-memory storage for prepared transactions (keyed by requestId)
+  private preparedTransactions = new Map<string, {
+    transaction: any;
+    transactionHash: string;
+    signerKeyPageUrl: string;
+    keyPageVersion: number;
+    lastUsedOn: number;
+    validTimestamp: number;
+    dataAccountUrl: string;
+    createdAt: number;
+  }>();
+
+  /**
+   * Prepare a WriteData transaction without signing.
+   * Returns the transaction hash that needs to be signed by the external signer (Key Vault).
+   */
+  async prepareWriteData(
+    adiName: string,
+    dataAccountName: string,
+    dataEntries: string[],
+    signerKeyPageUrl?: string,
+    memo?: string,
+    metadata?: Buffer
+  ): Promise<{
+    success: boolean;
+    requestId?: string;
+    transactionHash?: string;
+    signerKeyPageUrl?: string;
+    keyPageVersion?: number;
+    error?: string;
+  }> {
+    try {
+      this.logger.info('📝 Preparing WriteData transaction (two-phase)', {
+        adiName,
+        dataAccountName,
+        entriesCount: dataEntries.length,
+        hasMemo: !!memo,
+        hasMetadata: !!metadata
+      });
+
+      // Construct data account URL
+      const dataAccountUrl = `acc://${adiName}.acme/${dataAccountName}`;
+
+      // Use provided signer key page URL or construct default
+      const finalSignerKeyPageUrl = signerKeyPageUrl || `acc://${adiName}.acme/book/1`;
+
+      // Get current version of data account
+      let currentVersion = 1;
+      try {
+        const accountQuery = await this.client.query(dataAccountUrl);
+        if (accountQuery.account) {
+          currentVersion = accountQuery.account.version || 1;
+        }
+      } catch (queryError) {
+        this.logger.warn('⚠️ Could not query data account version, using default');
+      }
+
+      // Get FRESH key page version and lastUsedOn timestamp
+      const keyPageInfo = await this.getCurrentKeyPageInfo(finalSignerKeyPageUrl);
+
+      // Calculate valid timestamp
+      const lastUsedMicros = keyPageInfo.lastUsedOn || 0;
+      const rightNowMicros = Date.now() * 1000;
+      const validMicros = Math.max(lastUsedMicros + 2000000, rightNowMicros + 1000000);
+
+      // Prepare data entries as bytes
+      const dataEntriesAsBytes = dataEntries.map(entry => Buffer.from(entry, 'utf8'));
+
+      // Build WriteData transaction
+      const transaction = new Transaction({
+        header: {
+          principal: dataAccountUrl,
+          initiator: finalSignerKeyPageUrl,
+          memo: memo || 'certen-data-entry',
+          metadata: metadata,
+        },
+        body: {
+          type: "writeData",
+          entry: {
+            type: "doubleHash",
+            data: dataEntriesAsBytes,
+          },
+        },
+      });
+
+      // Calculate transaction hash
+      // The hash that needs to be signed is typically the transaction body hash
+      const transactionHash = transaction.hash();
+      const transactionHashHex = transactionHash.toString('hex');
+
+      // Generate a unique request ID
+      const requestId = `prep_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Store prepared transaction for later submission
+      this.preparedTransactions.set(requestId, {
+        transaction,
+        transactionHash: transactionHashHex,
+        signerKeyPageUrl: finalSignerKeyPageUrl,
+        keyPageVersion: keyPageInfo.version,
+        lastUsedOn: keyPageInfo.lastUsedOn,
+        validTimestamp: validMicros,
+        dataAccountUrl,
+        createdAt: Date.now()
+      });
+
+      // Clean up old prepared transactions (older than 10 minutes)
+      this.cleanupPreparedTransactions();
+
+      this.logger.info('✅ Transaction prepared for external signing', {
+        requestId,
+        transactionHash: transactionHashHex,
+        signerKeyPageUrl: finalSignerKeyPageUrl,
+        keyPageVersion: keyPageInfo.version
+      });
+
+      return {
+        success: true,
+        requestId,
+        transactionHash: transactionHashHex,
+        signerKeyPageUrl: finalSignerKeyPageUrl,
+        keyPageVersion: keyPageInfo.version
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to prepare WriteData transaction:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Submit a prepared transaction with an external signature.
+   * The signature must be for the transaction hash returned by prepareWriteData.
+   */
+  async submitWithExternalSignature(
+    requestId: string,
+    signature: string,
+    publicKey: string
+  ): Promise<{
+    success: boolean;
+    txHash?: string;
+    signatureTxHash?: string;
+    dataTransactionHash?: string;
+    dataAccountUrl?: string;
+    error?: string;
+  }> {
+    try {
+      this.logger.info('📤 Submitting transaction with external signature', {
+        requestId,
+        signatureLength: signature.length,
+        publicKeyLength: publicKey.length
+      });
+
+      // Retrieve prepared transaction
+      const prepared = this.preparedTransactions.get(requestId);
+      if (!prepared) {
+        return {
+          success: false,
+          error: 'Prepared transaction not found or expired. Please prepare again.'
+        };
+      }
+
+      // Remove from storage
+      this.preparedTransactions.delete(requestId);
+
+      // Convert signature and public key from hex to bytes
+      const signatureBytes = Buffer.from(signature.replace(/^0x/, ''), 'hex');
+      const publicKeyBytes = Buffer.from(publicKey.replace(/^0x/, ''), 'hex');
+
+      // Construct signature object manually
+      // This matches the structure created by signer.sign()
+      const sigObject = {
+        signature: signatureBytes,
+        publicKey: publicKeyBytes,
+        signer: prepared.signerKeyPageUrl,
+        signerVersion: prepared.keyPageVersion,
+        timestamp: prepared.validTimestamp
+      };
+
+      this.logger.info('🔐 Constructed signature object', {
+        signer: sigObject.signer,
+        signerVersion: sigObject.signerVersion,
+        timestamp: sigObject.timestamp
+      });
+
+      // Submit transaction with external signature
+      const submitPayload = {
+        transaction: [prepared.transaction],
+        signatures: [sigObject]
+      };
+
+      const submitResult = await this.client.submit(submitPayload);
+
+      // Process results
+      let signatureTxHash = null;
+      let dataTransactionHash = null;
+
+      for (const r of submitResult) {
+        if (!r.success) {
+          this.logger.error('❌ Transaction submission failed:', r);
+          throw new Error(`Submission failed: ${r.message || 'Unknown error'}`);
+        }
+        if (r.status?.txID) {
+          const currentTxHash = r.status.txID.toString();
+          if (r.status.result?.type === 'writeData') {
+            dataTransactionHash = currentTxHash;
+          } else {
+            signatureTxHash = currentTxHash;
+          }
+        }
+      }
+
+      this.logger.info('✅ Transaction submitted successfully with external signature', {
+        signatureTxHash,
+        dataTransactionHash,
+        dataAccountUrl: prepared.dataAccountUrl
+      });
+
+      return {
+        success: true,
+        txHash: signatureTxHash || dataTransactionHash,
+        signatureTxHash,
+        dataTransactionHash,
+        dataAccountUrl: prepared.dataAccountUrl
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to submit with external signature:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Clean up prepared transactions older than 10 minutes
+   */
+  private cleanupPreparedTransactions(): void {
+    const maxAge = 10 * 60 * 1000; // 10 minutes
+    const now = Date.now();
+
+    for (const [requestId, prepared] of this.preparedTransactions.entries()) {
+      if (now - prepared.createdAt > maxAge) {
+        this.preparedTransactions.delete(requestId);
+        this.logger.debug('Cleaned up expired prepared transaction', { requestId });
+      }
+    }
+  }
+
   async getKeyPageVersion(url: string): Promise<any> {
     try {
       const account = await this.client.query(url);

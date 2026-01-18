@@ -1021,6 +1021,173 @@ app.post('/api/v1/intent/create', async (req, res) => {
   }
 });
 
+// =============================================================================
+// TWO-PHASE SIGNING ENDPOINTS (for Key Vault external signing)
+// =============================================================================
+
+/**
+ * PREPARE INTENT - Phase 1 of two-phase signing
+ * Returns transaction hash for external signing by Key Vault extension
+ */
+app.post('/api/v1/intent/prepare', async (req, res) => {
+  try {
+    const { intent, contractAddresses, executionParameters, validationRules, expirationMinutes, signerKeyPageUrl, proofClass } = req.body;
+
+    console.log('🎯 Preparing Certen transaction intent (Phase 1 - Two-Phase Signing)', {
+      intentId: intent?.id,
+      adiUrl: intent?.adiUrl,
+      fromChain: intent?.fromChain,
+      toChain: intent?.toChain,
+      amount: intent?.amount
+    });
+
+    // Validate required fields
+    if (!intent) {
+      return res.status(400).json({
+        success: false,
+        error: 'Intent object is required'
+      });
+    }
+
+    if (!contractAddresses) {
+      return res.status(400).json({
+        success: false,
+        error: 'Contract addresses are required'
+      });
+    }
+
+    // Extract ADI name from URL
+    const adiUrl = intent.adiUrl;
+    const adiName = adiUrl.replace('acc://', '').split('.')[0];
+    const dataAccountName = 'data';
+
+    // Generate data entries for the intent
+    const dataEntries = [JSON.stringify({
+      certenProtocolVersion: '2.0',
+      transactionType: 'CROSS_CHAIN_INTENT',
+      intent: intent,
+      contractAddresses: contractAddresses,
+      executionParameters: executionParameters,
+      validationRules: validationRules,
+      proofClass: proofClass || 'on_demand',
+      expiresAt: new Date(Date.now() + (expirationMinutes || 95) * 60 * 1000).toISOString()
+    })];
+
+    // Prepare transaction without signing
+    const result = await accumulateService.prepareWriteData(
+      adiName,
+      dataAccountName,
+      dataEntries,
+      signerKeyPageUrl,
+      'certen-intent',
+      undefined
+    );
+
+    if (result.success) {
+      console.log('✅ Intent preparation successful', {
+        requestId: result.requestId,
+        transactionHash: result.transactionHash
+      });
+
+      res.json({
+        success: true,
+        requestId: result.requestId,
+        transactionHash: result.transactionHash,
+        signerKeyPageUrl: result.signerKeyPageUrl,
+        keyPageVersion: result.keyPageVersion,
+        intentId: intent.id,
+        message: 'Transaction prepared. Sign the transactionHash with Key Vault and call /api/v1/intent/submit-signed'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Failed to prepare Certen intent:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * SUBMIT SIGNED INTENT - Phase 2 of two-phase signing
+ * Accepts the signature from Key Vault and submits the transaction
+ */
+app.post('/api/v1/intent/submit-signed', async (req, res) => {
+  try {
+    const { requestId, signature, publicKey } = req.body;
+
+    console.log('📤 Submitting signed intent (Phase 2 - Two-Phase Signing)', {
+      requestId,
+      hasSignature: !!signature,
+      hasPublicKey: !!publicKey
+    });
+
+    // Validate required fields
+    if (!requestId) {
+      return res.status(400).json({
+        success: false,
+        error: 'requestId is required (from /api/v1/intent/prepare)'
+      });
+    }
+
+    if (!signature) {
+      return res.status(400).json({
+        success: false,
+        error: 'signature is required (from Key Vault)'
+      });
+    }
+
+    if (!publicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'publicKey is required (from Key Vault)'
+      });
+    }
+
+    // Submit with external signature
+    const result = await accumulateService.submitWithExternalSignature(
+      requestId,
+      signature,
+      publicKey
+    );
+
+    if (result.success) {
+      console.log('✅ Signed intent submitted successfully', {
+        txHash: result.txHash,
+        signatureTxHash: result.signatureTxHash,
+        dataTransactionHash: result.dataTransactionHash
+      });
+
+      res.json({
+        success: true,
+        txHash: result.txHash,
+        signatureTxHash: result.signatureTxHash,
+        dataTransactionHash: result.dataTransactionHash,
+        dataAccountUrl: result.dataAccountUrl,
+        message: 'Transaction submitted successfully with Key Vault signature'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Failed to submit signed intent:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 // Write data to data account endpoint (real implementation)
 app.post('/api/v1/data-account/write', async (req, res) => {
   try {
