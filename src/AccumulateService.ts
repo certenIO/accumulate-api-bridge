@@ -1070,13 +1070,24 @@ export class AccumulateService {
       const dataEntriesAsBytes = dataEntries.map(entry => Buffer.from(entry, 'utf8'));
 
       // Build WriteData transaction
+      // Note: Don't set 'initiator' here - it expects a hash, not a URL
+      // The initiator will be computed from the public key when the signature is applied
+      const transactionHeader: any = {
+        principal: dataAccountUrl,
+      };
+
+      // Only add memo if provided
+      if (memo) {
+        transactionHeader.memo = memo;
+      }
+
+      // Only add metadata if provided
+      if (metadata) {
+        transactionHeader.metadata = metadata;
+      }
+
       const transaction = new Transaction({
-        header: {
-          principal: dataAccountUrl,
-          initiator: finalSignerKeyPageUrl,
-          memo: memo || 'certen-data-entry',
-          metadata: metadata,
-        },
+        header: transactionHeader,
         body: {
           type: "writeData",
           entry: {
