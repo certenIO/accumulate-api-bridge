@@ -2808,7 +2808,8 @@ app.post('/api/v1/chain/deploy-account', async (req, res) => {
     const salt = BigInt(ethers.keccak256(ethers.toUtf8Bytes(adiUrl)));
 
     // Check if account already exists
-    const predictedAddress: string = await factory.getAddress(ownerAddress, adiUrl, salt);
+    // NOTE: Use bracket notation because ethers v6 has a built-in getAddress() method on Contract
+    const predictedAddress: string = await factory['getAddress'](ownerAddress, adiUrl, salt);
     const alreadyDeployed: boolean = await factory.isDeployedAccount(predictedAddress);
 
     if (alreadyDeployed) {
@@ -2944,7 +2945,8 @@ app.get('/api/v1/chain/account-address', async (req, res) => {
     const salt = BigInt(ethers.keccak256(ethers.toUtf8Bytes(adiUrlStr)));
 
     // Get predicted address
-    const predictedAddress: string = await factory.getAddress(ownerAddress, adiUrlStr, salt);
+    // NOTE: Use bracket notation because ethers v6 has a built-in getAddress() method on Contract
+    const predictedAddress: string = await factory['getAddress'](ownerAddress, adiUrlStr, salt);
 
     // Check if already deployed
     const isDeployed: boolean = await factory.isDeployedAccount(predictedAddress);
