@@ -3340,7 +3340,7 @@ app.get('/api/v1/proof/status/:txHash', async (req, res) => {
       });
     }
 
-    const proofData = await response.json();
+    const proofData = await response.json() as Record<string, unknown>;
 
     res.json({
       success: true,
@@ -3391,7 +3391,7 @@ app.get('/api/v1/anchor/batch/:batchId', async (req, res) => {
       });
     }
 
-    const batchData = await response.json();
+    const batchData = await response.json() as Record<string, unknown>;
 
     res.json({
       success: true,
@@ -3440,7 +3440,7 @@ app.get('/api/v1/anchor/confirmations/:proofId', async (req, res) => {
       });
     }
 
-    const anchorData = await response.json();
+    const anchorData = await response.json() as Record<string, unknown>;
 
     res.json({
       success: true,
@@ -3450,7 +3450,7 @@ app.get('/api/v1/anchor/confirmations/:proofId', async (req, res) => {
         blockNumber: anchorData.block_number,
         confirmations: anchorData.confirmations,
         requiredConfirmations: anchorData.required_confirmations || 6,
-        confirmed: anchorData.confirmations >= (anchorData.required_confirmations || 6),
+        confirmed: (anchorData.confirmations as number) >= ((anchorData.required_confirmations as number) || 6),
       },
     });
 
