@@ -1251,7 +1251,7 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
       dataAccountName,
       dataEntries,
       signerKeyPageUrl,
-      'certen-intent',
+      'CERTEN_INTENT',
       undefined,
       publicKey  // Required for computing initiator and proper hash to sign
     );
@@ -3036,6 +3036,430 @@ app.get('/api/v1/chain/sponsor-status', async (req, res) => {
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// ==================== Transaction Status Endpoints ====================
+
+/**
+ * GET /api/v1/intent/:txHash/status
+ *
+ * Get comprehensive status for a transaction intent by its Accumulate tx hash.
+ * Queries Accumulate network for pending/delivered status.
+ */
+app.get('/api/v1/intent/:txHash/status', async (req, res) => {
+  console.log('\n📊 GET /api/v1/intent/:txHash/status');
+
+  try {
+    const txHash = decodeURIComponent(req.params.txHash);
+    console.log('  Transaction hash:', txHash);
+
+    // Query Accumulate for transaction status using queryTransaction method
+    const queryResult = await accumulateService.queryTransaction(txHash, true);
+
+    let status = 'unknown';
+    let statusNo = 0;
+    let pendingSignatures = 0;
+    let collectedSignatures = 0;
+    let signers: string[] = [];
+
+    if (queryResult && queryResult.success) {
+      const txData = queryResult.transaction;
+      const txStatus = queryResult.status;
+
+      // Check status from response
+      if (txStatus === 'delivered' || queryResult.statusNo === 201) {
+        status = 'delivered';
+        statusNo = 201;
+      } else if (txStatus === 'pending' || queryResult.statusNo === 100) {
+        status = 'pending';
+        statusNo = 100;
+
+        // Try to get pending signature info
+        if (txData?.pending) {
+          pendingSignatures = txData.pending.requiredSignatures || 0;
+          collectedSignatures = txData.pending.signatures?.length || 0;
+          signers = txData.pending.signatures?.map((s: any) => s.signer) || [];
+        }
+      } else if (queryResult.statusNo >= 400) {
+        status = 'failed';
+        statusNo = queryResult.statusNo;
+      } else if (txData) {
+        // Transaction found - assume delivered
+        status = 'delivered';
+        statusNo = 201;
+      }
+    }
+
+    res.json({
+      success: true,
+      accumulate: {
+        status,
+        statusNo,
+        pendingSignatures,
+        collectedSignatures,
+        signers,
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get intent status:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/v1/intents/status/batch
+ *
+ * Batch query for multiple transaction statuses.
+ * More efficient than individual queries when checking many transactions.
+ */
+app.post('/api/v1/intents/status/batch', async (req, res) => {
+  console.log('\n📊 POST /api/v1/intents/status/batch');
+
+  try {
+    const { txHashes } = req.body;
+
+    if (!txHashes || !Array.isArray(txHashes)) {
+      return res.status(400).json({
+        success: false,
+        error: 'txHashes array is required',
+      });
+    }
+
+    console.log('  Querying', txHashes.length, 'transactions');
+
+    // Query each transaction using queryTransaction method
+    const results = await Promise.all(
+      txHashes.map(async (hash: string) => {
+        try {
+          const queryResult = await accumulateService.queryTransaction(hash, false);
+
+          let status = 'unknown';
+          let statusNo = 0;
+          let pendingSignatures = 0;
+          let collectedSignatures = 0;
+
+          if (queryResult && queryResult.success) {
+            const txData = queryResult.transaction;
+            const txStatus = queryResult.status;
+
+            if (txStatus === 'delivered' || queryResult.statusNo === 201) {
+              status = 'delivered';
+              statusNo = 201;
+            } else if (txStatus === 'pending' || queryResult.statusNo === 100) {
+              status = 'pending';
+              statusNo = 100;
+              if (txData?.pending) {
+                pendingSignatures = txData.pending.requiredSignatures || 0;
+                collectedSignatures = txData.pending.signatures?.length || 0;
+              }
+            } else if (queryResult.statusNo >= 400) {
+              status = 'failed';
+              statusNo = queryResult.statusNo;
+            } else if (txData) {
+              status = 'delivered';
+              statusNo = 201;
+            }
+          }
+
+          return {
+            txHash: hash,
+            status,
+            statusNo,
+            pendingSignatures,
+            collectedSignatures,
+          };
+        } catch (err) {
+          return {
+            txHash: hash,
+            error: err instanceof Error ? err.message : 'Query failed',
+          };
+        }
+      })
+    );
+
+    res.json({
+      success: true,
+      results,
+      timestamp: new Date().toISOString(),
+    });
+
+  } catch (error) {
+    console.error('❌ Failed batch status query:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * GET /api/v1/adi/:url/pending
+ *
+ * Get pending transactions for an ADI's data account.
+ * Returns transactions awaiting signatures on the pending chain.
+ * Note: Full pending chain queries require additional Accumulate API support.
+ */
+app.get('/api/v1/adi/:url/pending', async (req, res) => {
+  console.log('\n📊 GET /api/v1/adi/:url/pending');
+
+  try {
+    let adiUrl = decodeURIComponent(req.params.url);
+    if (!adiUrl.startsWith('acc://')) {
+      adiUrl = `acc://${adiUrl}`;
+    }
+
+    const dataAccountUrl = `${adiUrl}/data`;
+    console.log('  Checking data account:', dataAccountUrl);
+
+    // Get the data account to verify it exists
+    const accountResult = await accumulateService.getAccount(dataAccountUrl);
+
+    if (!accountResult || !accountResult.success) {
+      return res.json({
+        success: true,
+        adiUrl,
+        dataAccountUrl,
+        pending: [],
+        count: 0,
+        message: 'Data account not found or no pending transactions',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Note: Full pending chain enumeration requires the Accumulate query API
+    // For now, return empty array - pending status is tracked in Firestore
+    res.json({
+      success: true,
+      adiUrl,
+      dataAccountUrl,
+      pending: [],
+      count: 0,
+      message: 'Pending transactions are tracked via Firestore transaction intents',
+      timestamp: new Date().toISOString(),
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get pending transactions:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * GET /api/v1/adi/:url/intents
+ *
+ * Get recent intents from an ADI's data account.
+ * Returns the data account info and any stored data entries.
+ * Note: Full chain history queries require additional Accumulate API support.
+ */
+app.get('/api/v1/adi/:url/intents', async (req, res) => {
+  console.log('\n📊 GET /api/v1/adi/:url/intents');
+
+  try {
+    let adiUrl = decodeURIComponent(req.params.url);
+    if (!adiUrl.startsWith('acc://')) {
+      adiUrl = `acc://${adiUrl}`;
+    }
+
+    const dataAccountUrl = `${adiUrl}/data`;
+    const limitCount = parseInt(req.query.limit as string) || 50;
+
+    console.log('  Checking data account:', dataAccountUrl);
+
+    // Get the data account to verify it exists and get current state
+    const accountResult = await accumulateService.getAccount(dataAccountUrl);
+
+    if (!accountResult || !accountResult.success) {
+      return res.json({
+        success: true,
+        adiUrl,
+        dataAccountUrl,
+        intents: [],
+        count: 0,
+        message: 'Data account not found',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Note: Intent history is primarily tracked in Firestore
+    // The data account shows the current state, not full history
+    res.json({
+      success: true,
+      adiUrl,
+      dataAccountUrl,
+      account: accountResult.account,
+      intents: [],
+      count: 0,
+      message: 'Intent history is tracked via Firestore transaction intents',
+      timestamp: new Date().toISOString(),
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get ADI intents:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// ==================== Proof Service Proxy Endpoints ====================
+
+const PROOF_SERVICE_URL = process.env.PROOF_SERVICE_URL || 'http://localhost:8082';
+
+/**
+ * GET /api/v1/proof/status/:txHash
+ *
+ * Get proof status for a transaction.
+ * Proxies to the proof service.
+ */
+app.get('/api/v1/proof/status/:txHash', async (req, res) => {
+  console.log('\n📊 GET /api/v1/proof/status/:txHash');
+
+  try {
+    const txHash = decodeURIComponent(req.params.txHash);
+    console.log('  Checking proof status for:', txHash);
+
+    // Proxy to proof service
+    const response = await fetch(`${PROOF_SERVICE_URL}/api/v1/proofs/tx/${encodeURIComponent(txHash)}`);
+
+    if (!response.ok) {
+      return res.json({
+        success: true,
+        hasProof: false,
+        message: 'No proof found for this transaction',
+      });
+    }
+
+    const proofData = await response.json();
+
+    res.json({
+      success: true,
+      hasProof: true,
+      proof: {
+        proofId: proofData.proof_id,
+        status: proofData.verified ? 'verified' : 'pending',
+        batchId: proofData.batch_id,
+        batchType: proofData.batch_type,
+        merkleRoot: proofData.merkle_root,
+        anchorTxHash: proofData.anchor_tx_hash,
+        anchorChain: proofData.anchor_chain,
+        anchorBlockNumber: proofData.anchor_block_number,
+        confirmations: proofData.confirmations,
+      },
+    });
+
+  } catch (error) {
+    // Proof service may not be running - return graceful response
+    console.warn('⚠️ Proof service query failed:', error instanceof Error ? error.message : error);
+    res.json({
+      success: true,
+      hasProof: false,
+      message: 'Proof service unavailable',
+    });
+  }
+});
+
+/**
+ * GET /api/v1/anchor/batch/:batchId
+ *
+ * Get batch status by ID.
+ * Proxies to the proof service.
+ */
+app.get('/api/v1/anchor/batch/:batchId', async (req, res) => {
+  console.log('\n📊 GET /api/v1/anchor/batch/:batchId');
+
+  try {
+    const batchId = decodeURIComponent(req.params.batchId);
+    console.log('  Checking batch status for:', batchId);
+
+    const response = await fetch(`${PROOF_SERVICE_URL}/api/v1/batches/${encodeURIComponent(batchId)}`);
+
+    if (!response.ok) {
+      return res.status(404).json({
+        success: false,
+        error: 'Batch not found',
+      });
+    }
+
+    const batchData = await response.json();
+
+    res.json({
+      success: true,
+      batch: {
+        batchId: batchData.batch_id,
+        status: batchData.status, // pending, closed, anchoring, anchored, confirmed
+        batchType: batchData.batch_type, // on_demand, on_cadence
+        transactionCount: batchData.transaction_count,
+        merkleRoot: batchData.merkle_root,
+        anchorTxHash: batchData.anchor_tx_hash,
+        anchorChain: batchData.anchor_chain,
+        createdAt: batchData.created_at,
+        anchoredAt: batchData.anchored_at,
+      },
+    });
+
+  } catch (error) {
+    console.warn('⚠️ Batch query failed:', error instanceof Error ? error.message : error);
+    res.status(500).json({
+      success: false,
+      error: 'Batch query failed',
+    });
+  }
+});
+
+/**
+ * GET /api/v1/anchor/confirmations/:proofId
+ *
+ * Get anchor confirmation count for a proof.
+ * Proxies to the proof service.
+ */
+app.get('/api/v1/anchor/confirmations/:proofId', async (req, res) => {
+  console.log('\n📊 GET /api/v1/anchor/confirmations/:proofId');
+
+  try {
+    const proofId = decodeURIComponent(req.params.proofId);
+    console.log('  Checking confirmations for proof:', proofId);
+
+    const response = await fetch(`${PROOF_SERVICE_URL}/api/v1/proofs/${encodeURIComponent(proofId)}/confirmations`);
+
+    if (!response.ok) {
+      return res.json({
+        success: true,
+        anchor: null,
+        message: 'No anchor found for this proof',
+      });
+    }
+
+    const anchorData = await response.json();
+
+    res.json({
+      success: true,
+      anchor: {
+        txHash: anchorData.anchor_tx_hash,
+        chain: anchorData.chain,
+        blockNumber: anchorData.block_number,
+        confirmations: anchorData.confirmations,
+        requiredConfirmations: anchorData.required_confirmations || 6,
+        confirmed: anchorData.confirmations >= (anchorData.required_confirmations || 6),
+      },
+    });
+
+  } catch (error) {
+    console.warn('⚠️ Confirmations query failed:', error instanceof Error ? error.message : error);
+    res.json({
+      success: true,
+      anchor: null,
+      message: 'Confirmation query failed',
     });
   }
 });
