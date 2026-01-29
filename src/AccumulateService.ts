@@ -1395,6 +1395,25 @@ export class AccumulateService {
   async updateKeyPage(keyPageUrl: string, operations: any[], signerKeypageUrl?: string): Promise<any> {
     try {
       this.logger.info('📝 Updating KeyPage using SDK pattern (matching createKeyPage)', { keyPageUrl, operationsCount: operations.length });
+      // Transform operations to SDK format:
+      // API receives: { type: 'add', delegate: 'acc://...' } or { type: 'add', keyHash: '...' }
+      // SDK expects: { type: 'add', entry: { delegate: 'acc://...' } } or { type: 'add', entry: { keyHash: '...' } }
+      const transformedOperations = operations.map(op => {
+        if (op.delegate || op.keyHash) {
+          return {
+            type: op.type,
+            entry: {
+              ...(op.delegate && { delegate: op.delegate }),
+              ...(op.keyHash && { keyHash: op.keyHash })
+            }
+          };
+        }
+        // For operations like setThreshold, pass through as-is
+        return op;
+      });
+
+      this.logger.info('🔄 Transformed operations for SDK:', { original: operations, transformed: transformedOperations });
+
 
       // Use the same keypage as signer if not specified
       const signerUrl = signerKeypageUrl || keyPageUrl;
@@ -1425,7 +1444,7 @@ export class AccumulateService {
         },
         body: {
           type: "updateKeyPage",
-          operations: operations,
+          operation: transformedOperations,
         },
       });
 
