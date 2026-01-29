@@ -2687,20 +2687,85 @@ const ACCOUNT_FACTORY_ABI = [
 
 // Chain configuration for EVM networks
 // Supports both chain names (e.g., "sepolia") and numeric chain IDs (e.g., "11155111")
+// Factory addresses from certen-web-app/src/config/contracts.ts
+
 const SEPOLIA_CONFIG = {
-  rpcUrl: process.env.EVM_SEPOLIA_RPC_URL || 'https://sepolia.infura.io/v3/YOUR_KEY',
-  factoryAddress: process.env.EVM_SEPOLIA_ACCOUNT_FACTORY || '0xbd9D33310358C8A10254175dD297e2CA8cd623c3',
+  rpcUrl: process.env.EVM_SEPOLIA_RPC_URL || 'https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  factoryAddress: process.env.EVM_SEPOLIA_ACCOUNT_FACTORY || '0xc0e54d4D1A5B25e4Cc719Bec436c44241F2BA5d9',
   explorerUrl: 'https://sepolia.etherscan.io',
-  name: 'Sepolia Testnet'
+  name: 'Ethereum Sepolia'
+};
+
+const ARBITRUM_SEPOLIA_CONFIG = {
+  rpcUrl: process.env.EVM_ARBITRUM_SEPOLIA_RPC_URL || 'https://arbitrum-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  factoryAddress: process.env.EVM_ARBITRUM_SEPOLIA_ACCOUNT_FACTORY || '0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d',
+  explorerUrl: 'https://sepolia.arbiscan.io',
+  name: 'Arbitrum Sepolia'
+};
+
+const BASE_SEPOLIA_CONFIG = {
+  rpcUrl: process.env.EVM_BASE_SEPOLIA_RPC_URL || 'https://base-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  factoryAddress: process.env.EVM_BASE_SEPOLIA_ACCOUNT_FACTORY || '0xc9489206a9c8fa12129fa1efee8ccb47ed93896d',
+  explorerUrl: 'https://sepolia-explorer.base.org',
+  name: 'Base Sepolia'
+};
+
+const BSC_TESTNET_CONFIG = {
+  rpcUrl: process.env.EVM_BSC_TESTNET_RPC_URL || 'https://data-seed-prebsc-1-s1.binance.org:8545',
+  factoryAddress: process.env.EVM_BSC_TESTNET_ACCOUNT_FACTORY || '0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d',
+  explorerUrl: 'https://testnet.bscscan.com',
+  name: 'BSC Testnet'
+};
+
+const OPTIMISM_SEPOLIA_CONFIG = {
+  rpcUrl: process.env.EVM_OPTIMISM_SEPOLIA_RPC_URL || 'https://optimism-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  factoryAddress: process.env.EVM_OPTIMISM_SEPOLIA_ACCOUNT_FACTORY || '0xCc1fE1950c89A6fF1ef28cCF38bA151fF8abFD5C',
+  explorerUrl: 'https://sepolia-optimistic.etherscan.io',
+  name: 'Optimism Sepolia'
+};
+
+const POLYGON_AMOY_CONFIG = {
+  rpcUrl: process.env.EVM_POLYGON_AMOY_RPC_URL || 'https://rpc-amoy.polygon.technology',
+  factoryAddress: process.env.EVM_POLYGON_AMOY_ACCOUNT_FACTORY || '0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d',
+  explorerUrl: 'https://amoy.polygonscan.com',
+  name: 'Polygon Amoy'
+};
+
+const MOONBASE_ALPHA_CONFIG = {
+  rpcUrl: process.env.EVM_MOONBASE_ALPHA_RPC_URL || 'https://rpc.api.moonbase.moonbeam.network',
+  factoryAddress: process.env.EVM_MOONBASE_ALPHA_ACCOUNT_FACTORY || '0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d',
+  explorerUrl: 'https://moonbase.moonscan.io',
+  name: 'Moonbeam Moonbase Alpha'
 };
 
 const EVM_CHAIN_CONFIG: Record<string, { rpcUrl: string; factoryAddress: string; explorerUrl: string; name: string }> = {
-  // Sepolia - by name and chain ID
+  // Ethereum Sepolia - by name and chain ID
   'sepolia': SEPOLIA_CONFIG,
   '11155111': SEPOLIA_CONFIG,
-  // Add more chains as needed:
-  // 'ethereum': ETHEREUM_CONFIG,
-  // '1': ETHEREUM_CONFIG,
+
+  // Arbitrum Sepolia
+  'arbitrum-sepolia': ARBITRUM_SEPOLIA_CONFIG,
+  '421614': ARBITRUM_SEPOLIA_CONFIG,
+
+  // Base Sepolia
+  'base-sepolia': BASE_SEPOLIA_CONFIG,
+  '84532': BASE_SEPOLIA_CONFIG,
+
+  // BSC Testnet
+  'bsc-testnet': BSC_TESTNET_CONFIG,
+  '97': BSC_TESTNET_CONFIG,
+
+  // Optimism Sepolia
+  'optimism-sepolia': OPTIMISM_SEPOLIA_CONFIG,
+  '11155420': OPTIMISM_SEPOLIA_CONFIG,
+
+  // Polygon Amoy
+  'polygon-amoy': POLYGON_AMOY_CONFIG,
+  '80002': POLYGON_AMOY_CONFIG,
+
+  // Moonbeam Moonbase Alpha
+  'moonbase-alpha': MOONBASE_ALPHA_CONFIG,
+  '1287': MOONBASE_ALPHA_CONFIG,
 };
 
 /**
