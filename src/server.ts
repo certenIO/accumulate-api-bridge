@@ -1032,7 +1032,20 @@ app.post('/api/v1/intent/create', async (req, res) => {
  */
 app.post('/api/v1/intent/prepare', async (req, res) => {
   try {
-    const { intent, contractAddresses, executionParameters, validationRules, expirationMinutes, signerKeyPageUrl, proofClass, publicKey } = req.body;
+    const {
+      intent,
+      contractAddresses,
+      executionParameters,
+      validationRules,
+      expirationMinutes,
+      signerKeyPageUrl,
+      proofClass,
+      publicKey,
+      // Advanced Transaction Conditions (wired to Accumulate transaction header)
+      transactionMetadata,     // User-provided metadata string
+      expireAtTime,            // ISO timestamp for transaction expiration
+      additionalAuthorities    // Array of additional authority URLs
+    } = req.body;
 
     console.log('🎯 Preparing Certen transaction intent (Phase 1 - Two-Phase Signing)', {
       intentId: intent?.id,
@@ -1040,7 +1053,10 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
       fromChain: intent?.fromChain,
       toChain: intent?.toChain,
       amount: intent?.amount,
-      hasPublicKey: !!publicKey
+      hasPublicKey: !!publicKey,
+      hasMetadata: !!transactionMetadata,
+      hasExpire: !!expireAtTime,
+      hasAuthorities: !!additionalAuthorities?.length
     });
 
     // Validate required fields
@@ -1246,14 +1262,17 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
     ];
 
     // Prepare transaction without signing - pass publicKey for proper hash computation
+    // Also pass Advanced Transaction Conditions for the Accumulate transaction header
     const result = await accumulateService.prepareWriteData(
       adiName,
       dataAccountName,
       dataEntries,
       signerKeyPageUrl,
       'CERTEN_INTENT',
-      undefined,
-      publicKey  // Required for computing initiator and proper hash to sign
+      publicKey,              // Required for computing initiator and proper hash to sign
+      transactionMetadata,    // User-provided metadata for transaction header
+      expireAtTime,           // Transaction expiration timestamp
+      additionalAuthorities   // Additional authority URLs required for this tx
     );
 
     if (result.success) {
@@ -1366,7 +1385,7 @@ app.post('/api/v1/intent/submit-signed', async (req, res) => {
 // Write data to data account endpoint (real implementation)
 app.post('/api/v1/data-account/write', async (req, res) => {
   try {
-    const { adiName, dataAccountName, dataEntries, adiPrivateKey, signerKeyPageUrl, memo, metadata } = req.body;
+    const { adiName, dataAccountName, dataEntries, adiPrivateKey, signerKeyPageUrl, memo } = req.body;
 
     if (!adiName) {
       return res.status(400).json({
@@ -1397,23 +1416,10 @@ app.post('/api/v1/data-account/write', async (req, res) => {
       });
     }
 
-    // Process metadata if provided as hex string
-    let metadataBuffer: Buffer | undefined;
-    if (metadata) {
-      if (typeof metadata === 'string') {
-        metadataBuffer = Buffer.from(metadata, 'hex');
-      } else if (Array.isArray(metadata)) {
-        metadataBuffer = Buffer.from(metadata);
-      } else {
-        metadataBuffer = metadata;
-      }
-    }
-
     console.log(`📝 Writing ${dataEntries.length} entries to data account: ${dataAccountName} under ADI: ${adiName}`, {
       hasPrivateKey: !!adiPrivateKey,
       signerKeyPageUrl: signerKeyPageUrl || 'using default',
       hasMemo: !!memo,
-      hasMetadata: !!metadataBuffer,
       memo: memo || 'none'
     });
 
@@ -1423,8 +1429,7 @@ app.post('/api/v1/data-account/write', async (req, res) => {
       dataEntries,
       adiPrivateKey,
       signerKeyPageUrl,
-      memo,           // Optional memo field
-      metadataBuffer  // Optional metadata field
+      memo  // Optional memo field for intent discovery
     );
 
     res.json(result);

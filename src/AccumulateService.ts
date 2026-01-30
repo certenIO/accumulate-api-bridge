@@ -788,7 +788,7 @@ export class AccumulateService {
     }
   }
 
-  async writeData(adiName: string, dataAccountName: string, dataEntries: string[], adiPrivateKey?: string, signerKeyPageUrl?: string, memo?: string, metadata?: Buffer): Promise<any> {
+  async writeData(adiName: string, dataAccountName: string, dataEntries: string[], adiPrivateKey?: string, signerKeyPageUrl?: string, memo?: string): Promise<any> {
     console.log('🚨 WRITEDATA METHOD CALLED - DEBUG VERSION!');
     try {
       this.logger.info('📝 Writing data entries to Accumulate data account', {
@@ -797,9 +797,7 @@ export class AccumulateService {
         entriesCount: dataEntries.length,
         totalSize: dataEntries.reduce((sum, entry) => sum + entry.length, 0),
         hasMemo: !!memo,
-        hasMetadata: !!metadata,
-        memo: memo || 'none',
-        metadataSize: metadata?.length || 0
+        memo: memo || 'none'
       });
 
       // Construct data account URL
@@ -853,12 +851,6 @@ export class AccumulateService {
       if (memo) {
         transactionHeader.memo = memo;
         this.logger.info('📝 Adding memo to transaction header:', { memo });
-      }
-
-      // Add metadata if provided (for Certen intent metadata)
-      if (metadata) {
-        transactionHeader.metadata = metadata;
-        this.logger.info('📄 Adding metadata to transaction header:', { metadataSize: metadata.length });
       }
 
       const transaction = new Transaction({
@@ -1029,6 +1021,10 @@ export class AccumulateService {
   /**
    * Prepare a WriteData transaction without signing.
    * Returns the transaction hash that needs to be signed by the external signer (Key Vault).
+   *
+   * @param transactionMetadata - Optional user-provided metadata (string or hex) attached to tx header
+   * @param expireAtTime - Optional ISO timestamp for transaction expiration
+   * @param additionalAuthorities - Optional array of authority URLs required for this transaction
    */
   async prepareWriteData(
     adiName: string,
@@ -1036,8 +1032,10 @@ export class AccumulateService {
     dataEntries: string[],
     signerKeyPageUrl?: string,
     memo?: string,
-    metadata?: Buffer,
-    publicKey?: string  // User's public key (hex) for computing initiator
+    publicKey?: string,  // User's public key (hex) for computing initiator
+    transactionMetadata?: string,  // User-provided metadata for transaction header
+    expireAtTime?: string,  // ISO timestamp for transaction expiration
+    additionalAuthorities?: string[]  // Additional authority URLs for this transaction
   ): Promise<{
     success: boolean;
     requestId?: string;
@@ -1053,7 +1051,9 @@ export class AccumulateService {
         dataAccountName,
         entriesCount: dataEntries.length,
         hasMemo: !!memo,
-        hasMetadata: !!metadata
+        hasMetadata: !!transactionMetadata,
+        hasExpire: !!expireAtTime,
+        hasAuthorities: !!additionalAuthorities?.length
       });
 
       // Construct data account URL
@@ -1096,9 +1096,32 @@ export class AccumulateService {
         transactionHeader.memo = memo;
       }
 
-      // Only add metadata if provided
-      if (metadata) {
-        transactionHeader.metadata = metadata;
+      // Add user-provided transaction metadata if provided
+      // This is different from the 4-byte metadata we removed - this is user data
+      if (transactionMetadata) {
+        // Convert string to Buffer/Uint8Array for the transaction header
+        transactionHeader.metadata = Buffer.from(transactionMetadata, 'utf8');
+        this.logger.info('📄 Adding user metadata to transaction header:', {
+          metadataLength: transactionMetadata.length
+        });
+      }
+
+      // Add expire options if provided
+      if (expireAtTime) {
+        transactionHeader.expire = {
+          atTime: new Date(expireAtTime)
+        };
+        this.logger.info('⏰ Adding expiration to transaction header:', {
+          expireAtTime: expireAtTime
+        });
+      }
+
+      // Add additional authorities if provided
+      if (additionalAuthorities && additionalAuthorities.length > 0) {
+        transactionHeader.authorities = additionalAuthorities;
+        this.logger.info('🔐 Adding additional authorities to transaction header:', {
+          authorities: additionalAuthorities
+        });
       }
 
       // If public key is provided, compute the proper hash to sign

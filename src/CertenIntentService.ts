@@ -161,13 +161,6 @@ export class CertenIntentService {
         request.proofClass || 'on_demand'  // Default to on_demand if not specified
       );
 
-      // Generate transaction metadata
-      const metadata = this.generateTransactionMetadata(
-        INTENT_TYPE_TRANSFER,
-        INTENT_PRIORITY_HIGH,
-        request.expirationMinutes || 95
-      );
-
       // Extract ADI and data account names
       const adiUrl = request.intent.adiUrl;
       const adiName = this.extractAdiName(adiUrl);
@@ -177,17 +170,15 @@ export class CertenIntentService {
         adiName,
         dataAccountName,
         memo: CERTEN_INTENT_MEMO,
-        metadataLength: metadata.length,
         dataEntriesCount: dataEntries.length
       });
 
-      // Write intent to Accumulate with special memo and metadata
-      const result = await this.writeIntentWithMetadata(
+      // Write intent to Accumulate with memo for validator discovery
+      const result = await this.writeIntentWithMemo(
         adiName,
         dataAccountName,
         dataEntries,
         CERTEN_INTENT_MEMO,
-        metadata,
         adiPrivateKey,
         signerKeyPageUrl
       );
@@ -528,53 +519,36 @@ export class CertenIntentService {
   }
 
   /**
-   * Generates transaction metadata for intent discovery
+   * Writes intent to Accumulate with memo for validator discovery
+   * Note: 4-byte metadata removed - all data is in the 4 JSON blobs
    */
-  private generateTransactionMetadata(intentType: number, priority: number, expirationMinutes: number): Buffer {
-    return Buffer.from([
-      intentType,        // Intent type (1 = TRANSFER)
-      priority,          // Priority (2 = HIGH, 1 = MEDIUM, 0 = LOW)
-      expirationMinutes, // Expiration in minutes from transaction time
-      0                  // Reserved
-    ]);
-  }
-
-  /**
-   * Writes intent to Accumulate with special memo and metadata
-   * Uses the enhanced AccumulateService.writeData with Certen-specific headers
-   */
-  private async writeIntentWithMetadata(
+  private async writeIntentWithMemo(
     adiName: string,
     dataAccountName: string,
     dataEntries: string[],
     memo: string,
-    metadata: Buffer,
     adiPrivateKey: string,
     signerKeyPageUrl?: string
   ): Promise<any> {
-    this.logger.info('📝 Writing Certen intent with enhanced headers', {
+    this.logger.info('📝 Writing Certen intent', {
       adiName,
       dataAccountName,
       memo,
-      metadataSize: metadata.length,
       dataEntriesCount: dataEntries.length
     });
 
-    // ✅ Now using the enhanced writeData method with memo and metadata support
     const result = await this.accumulateService.writeData(
       adiName,
       dataAccountName,
       dataEntries,
       adiPrivateKey,
       signerKeyPageUrl,
-      memo,        // 🎯 CERTEN_INTENT memo for validator discovery
-      metadata     // 📄 Intent metadata (type, priority, expiration)
+      memo  // 🎯 CERTEN_INTENT memo for validator discovery
     );
 
-    this.logger.info('✅ Certen intent written to Accumulate with discovery headers', {
+    this.logger.info('✅ Certen intent written to Accumulate', {
       txHash: result.txHash,
-      memo: memo,
-      metadataIncluded: true
+      memo: memo
     });
 
     return result;
