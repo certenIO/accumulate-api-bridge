@@ -1112,9 +1112,12 @@ export class AccumulateService {
         this.logger.info('⏰ Adding expiration to transaction header', {
           expireAtTime: expireAtTime,
           expireTimestamp,
-          expireDate: expireDate.toISOString()
+          expireDate: expireDate.toISOString(),
+          expireDateMs: expireDate.getTime(),
+          expireDateUnixSec: Math.floor(expireDate.getTime() / 1000)
         });
-        transactionHeader.expire = { atTime: expireDate };
+        // Use SDK's ExpireOptions class explicitly
+        transactionHeader.expire = new core.ExpireOptions({ atTime: expireDate });
       }
 
       if (additionalAuthorities && additionalAuthorities.length > 0) {
