@@ -1053,7 +1053,7 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
       publicKey,
       // Advanced Transaction Conditions (wired to Accumulate transaction header)
       transactionMetadata,     // User-provided metadata string
-      expireAtTime,            // ISO timestamp for transaction expiration
+      expireAtTime,            // Unix timestamp (seconds) for transaction expiration
       additionalAuthorities    // Array of additional authority URLs
     } = req.body;
 

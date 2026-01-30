@@ -1096,32 +1096,32 @@ export class AccumulateService {
         transactionHeader.memo = memo;
       }
 
-      // Add user-provided transaction metadata if provided
-      // This is different from the 4-byte metadata we removed - this is user data
+      // Advanced Transaction Conditions - Add to transaction header
       if (transactionMetadata) {
-        // Convert string to Buffer/Uint8Array for the transaction header
-        transactionHeader.metadata = Buffer.from(transactionMetadata, 'utf8');
-        this.logger.info('📄 Adding user metadata to transaction header:', {
+        this.logger.info('📄 Adding user metadata to transaction header', {
           metadataLength: transactionMetadata.length
         });
+        transactionHeader.metadata = Buffer.from(transactionMetadata, 'utf8');
       }
 
-      // Add expire options if provided
       if (expireAtTime) {
-        transactionHeader.expire = {
-          atTime: new Date(expireAtTime)
-        };
-        this.logger.info('⏰ Adding expiration to transaction header:', {
-          expireAtTime: expireAtTime
+        // expireAtTime is now a Unix timestamp (seconds) as a string
+        // Convert to Date object for the SDK's Time encoder
+        const expireTimestamp = parseInt(expireAtTime, 10);
+        const expireDate = new Date(expireTimestamp * 1000); // Convert seconds to milliseconds
+        this.logger.info('⏰ Adding expiration to transaction header', {
+          expireAtTime: expireAtTime,
+          expireTimestamp,
+          expireDate: expireDate.toISOString()
         });
+        transactionHeader.expire = { atTime: expireDate };
       }
 
-      // Add additional authorities if provided
       if (additionalAuthorities && additionalAuthorities.length > 0) {
-        transactionHeader.authorities = additionalAuthorities;
-        this.logger.info('🔐 Adding additional authorities to transaction header:', {
+        this.logger.info('🔐 Adding additional authorities to transaction header', {
           authorities: additionalAuthorities
         });
+        transactionHeader.authorities = additionalAuthorities;
       }
 
       // If public key is provided, compute the proper hash to sign
