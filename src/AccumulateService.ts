@@ -1263,9 +1263,21 @@ export class AccumulateService {
       // Remove from storage
       this.preparedTransactions.delete(requestId);
 
-      // Convert signature and public key from hex to bytes
+      // Convert signature from hex to bytes
       const signatureBytes = Buffer.from(signature.replace(/^0x/, ''), 'hex');
-      const publicKeyBytes = Buffer.from(publicKey.replace(/^0x/, ''), 'hex');
+
+      // CRITICAL: Use the CACHED public key from prepare, not the one passed in
+      // This ensures the sigMdHash computed by Accumulate matches what was signed
+      const cachedPublicKey = prepared.publicKey;
+      const publicKeyBytes = Buffer.from(cachedPublicKey.replace(/^0x/, ''), 'hex');
+
+      // Verify the public key matches (for debugging)
+      if (publicKey.replace(/^0x/, '').toLowerCase() !== cachedPublicKey.replace(/^0x/, '').toLowerCase()) {
+        this.logger.warn('⚠️ Public key mismatch!', {
+          provided: publicKey.substring(0, 16) + '...',
+          cached: cachedPublicKey.substring(0, 16) + '...'
+        });
+      }
 
       // Construct signature object manually
       // This matches the structure created by signer.sign()
