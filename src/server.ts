@@ -961,14 +961,15 @@ app.post('/api/v1/query', async (req, res) => {
 // 🎯 CREATE CERTEN TRANSACTION INTENT - Core Endpoint
 app.post('/api/v1/intent/create', async (req, res) => {
   try {
-    const { intent, contractAddresses, executionParameters, validationRules, expirationMinutes, adiPrivateKey, signerKeyPageUrl } = req.body;
+    const { intent, contractAddresses, executionParameters, validationRules, expirationMinutes, adiPrivateKey, signerKeyPageUrl, proofClass } = req.body;
 
     console.log('🎯 Creating Certen transaction intent', {
       intentId: intent?.id,
       fromChain: intent?.fromChain,
       toChain: intent?.toChain,
       amount: intent?.amount,
-      adiUrl: intent?.adiUrl
+      adiUrl: intent?.adiUrl,
+      proofClass: proofClass || 'on_demand (default)'
     });
 
     // Validate required fields
@@ -983,6 +984,14 @@ app.post('/api/v1/intent/create', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Contract addresses are required'
+      });
+    }
+
+    // Validate proof_class if provided (must be 'on_demand' or 'on_cadence')
+    if (proofClass !== undefined && proofClass !== 'on_demand' && proofClass !== 'on_cadence') {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid proof_class: '${proofClass}'. Must be 'on_demand' or 'on_cadence'`
       });
     }
 
@@ -1001,7 +1010,8 @@ app.post('/api/v1/intent/create', async (req, res) => {
       contractAddresses,
       executionParameters,
       validationRules,
-      expirationMinutes: expirationMinutes || 95
+      expirationMinutes: expirationMinutes || 95,
+      proofClass: proofClass || 'on_demand'  // Default to on_demand for immediate processing
     };
 
     // Create the intent using CertenIntentService
@@ -1078,6 +1088,14 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'publicKey is required for two-phase signing (from Key Vault)'
+      });
+    }
+
+    // Validate proof_class if provided (must be 'on_demand' or 'on_cadence')
+    if (proofClass !== undefined && proofClass !== 'on_demand' && proofClass !== 'on_cadence') {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid proof_class: '${proofClass}'. Must be 'on_demand' or 'on_cadence'`
       });
     }
 
