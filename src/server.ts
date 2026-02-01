@@ -3666,7 +3666,8 @@ app.post('/api/v2/intents', async (req, res) => {
     };
 
     // Get private key from stored ADI or fall back to sponsor key
-    const privateKeyToUse = adiStorageService.getPrivateKey(adiUrl) || process.env.ACCUM_PRIV_KEY?.substring(0, 64) || '';
+    const storedAdi = adiStorageService.getAdi(adiUrl);
+    const privateKeyToUse = storedAdi?.privateKey || process.env.ACCUM_PRIV_KEY?.substring(0, 64) || '';
     if (!privateKeyToUse) {
       return res.status(400).json({
         success: false,
@@ -3687,7 +3688,7 @@ app.post('/api/v2/intents', async (req, res) => {
     res.json({
       success: true,
       intent_id: intentId,
-      operation_id: result.operationId,
+      operation_id: result.roundId,
       tx_hash: result.txHash,
       leg_count: legCount,
       execution_mode,
