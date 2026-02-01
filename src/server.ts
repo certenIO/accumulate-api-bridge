@@ -14,7 +14,7 @@ import crypto from 'crypto';
 import { ethers } from 'ethers';
 import { AccumulateService } from './AccumulateService.js';
 import { AdiStorageService } from './AdiStorageService.js';
-import { CertenIntentService, CreateIntentRequest } from './CertenIntentService.js';
+import { CertenIntentService, CreateIntentRequest, CreateMultiLegIntentRequest, IntentLeg, ExecutionMode } from './CertenIntentService.js';
 
 // Load environment variables first
 dotenv.config();
@@ -3639,22 +3639,37 @@ app.post('/api/v2/intents', async (req, res) => {
     }
     console.log(`  Chain groups: ${Object.keys(chainGroups).join(', ')}`);
 
-    // Use the existing intent creation with enhanced cross-chain data
+    // Build multi-leg intent request
     const adiUrl = adi_url || governance_data?.organizationAdi || '';
-    const createRequest: CreateIntentRequest = {
+
+    // Convert incoming legs to IntentLeg format
+    const intentLegs: IntentLeg[] = cross_chain_data.legs.map((leg: any, index: number) => ({
+      legId: leg.legId || `leg-${index}`,
+      role: leg.role || (index === 0 ? 'source' : 'destination'),
+      chain: leg.chain || 'ethereum',
+      chainId: leg.chainId || 1,
+      fromAddress: leg.from || '',
+      toAddress: leg.to || '',
+      amount: leg.amountEth || '0',
+      amountWei: leg.amountWei,
+      tokenSymbol: leg.asset?.symbol || 'ETH',
+      tokenAddress: leg.asset?.address,
+      sequenceOrder: leg.sequence_order ?? index,
+    }));
+
+    console.log(`  Building multi-leg intent with ${intentLegs.length} legs`);
+    intentLegs.forEach((leg, i) => {
+      console.log(`    Leg ${i}: ${leg.chain} ${leg.amount} ${leg.tokenSymbol} -> ${leg.toAddress.slice(0, 10)}...`);
+    });
+
+    const createRequest: CreateMultiLegIntentRequest = {
       intent: {
         id: intentId,
-        fromChain: 'accumulate',
-        fromChainId: 0,
-        toChain: cross_chain_data.legs[0]?.chain || 'ethereum',
-        toChainId: cross_chain_data.legs[0]?.chainId,
-        fromAddress: cross_chain_data.legs[0]?.from || '',
-        toAddress: cross_chain_data.legs[0]?.to || '',
-        amount: cross_chain_data.legs[0]?.amountEth || '0',
-        tokenSymbol: cross_chain_data.legs[0]?.asset?.symbol || 'ETH',
+        legs: intentLegs,
         adiUrl: adiUrl,
         initiatedBy: intent_data?.created_by || 'api-bridge',
         timestamp: Date.now(),
+        executionMode: execution_mode as ExecutionMode,
       },
       contractAddresses: contract_addresses || {
         anchor: '0x8398D7EB594bCc608a0210cf206b392d35Ed5339',
@@ -3663,6 +3678,7 @@ app.post('/api/v2/intents', async (req, res) => {
         entryPoint: '',
       },
       proofClass: proof_class as 'on_demand' | 'on_cadence',
+      executionMode: execution_mode as ExecutionMode,
     };
 
     // Get private key from stored ADI or fall back to sponsor key
@@ -3675,8 +3691,8 @@ app.post('/api/v2/intents', async (req, res) => {
       });
     }
 
-    // Create the intent via the existing service
-    const result = await certenIntentService.createTransactionIntent(createRequest, privateKeyToUse);
+    // Create the multi-leg intent via the service
+    const result = await certenIntentService.createMultiLegTransactionIntent(createRequest, privateKeyToUse);
 
     if (!result.success) {
       return res.status(500).json({
