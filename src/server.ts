@@ -3640,6 +3640,7 @@ app.post('/api/v2/intents', async (req, res) => {
     console.log(`  Chain groups: ${Object.keys(chainGroups).join(', ')}`);
 
     // Use the existing intent creation with enhanced cross-chain data
+    const adiUrl = adi_url || governance_data?.organizationAdi || '';
     const createRequest: CreateIntentRequest = {
       intent: {
         id: intentId,
@@ -3651,7 +3652,7 @@ app.post('/api/v2/intents', async (req, res) => {
         toAddress: cross_chain_data.legs[0]?.to || '',
         amount: cross_chain_data.legs[0]?.amountEth || '0',
         tokenSymbol: cross_chain_data.legs[0]?.asset?.symbol || 'ETH',
-        adiUrl: adi_url || governance_data?.organizationAdi || '',
+        adiUrl: adiUrl,
         initiatedBy: intent_data?.created_by || 'api-bridge',
         timestamp: Date.now(),
       },
@@ -3664,8 +3665,17 @@ app.post('/api/v2/intents', async (req, res) => {
       proofClass: proof_class as 'on_demand' | 'on_cadence',
     };
 
+    // Get private key from stored ADI or fall back to sponsor key
+    const privateKeyToUse = adiStorageService.getPrivateKey(adiUrl) || process.env.ACCUM_PRIV_KEY?.substring(0, 64) || '';
+    if (!privateKeyToUse) {
+      return res.status(400).json({
+        success: false,
+        error: 'No private key available for this ADI',
+      });
+    }
+
     // Create the intent via the existing service
-    const result = await certenIntentService.createIntent(createRequest, enrichedCrossChainData, governance_data, replay_data);
+    const result = await certenIntentService.createTransactionIntent(createRequest, privateKeyToUse);
 
     if (!result.success) {
       return res.status(500).json({
