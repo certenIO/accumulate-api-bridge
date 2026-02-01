@@ -3552,6 +3552,438 @@ app.get('/api/v1/anchor/confirmations/:proofId', async (req, res) => {
   }
 });
 
+// ==================== V2 Multi-Leg Intent Endpoints ====================
+
+/**
+ * POST /api/v2/intents
+ *
+ * Create a multi-leg intent with support for 1-N legs targeting same or different chains.
+ * Supports execution modes: sequential, parallel, atomic
+ */
+app.post('/api/v2/intents', async (req, res) => {
+  console.log('\n🔀 POST /api/v2/intents (Multi-Leg Intent)');
+
+  try {
+    const {
+      intent_data,
+      cross_chain_data,
+      governance_data,
+      replay_data,
+      execution_mode = 'sequential',
+      proof_class = 'on_demand',
+      contract_addresses,
+      adi_url,
+    } = req.body;
+
+    // Validate required fields
+    if (!cross_chain_data || !cross_chain_data.legs || !Array.isArray(cross_chain_data.legs)) {
+      return res.status(400).json({
+        success: false,
+        error: 'cross_chain_data.legs is required and must be an array',
+      });
+    }
+
+    if (cross_chain_data.legs.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'At least one leg is required',
+      });
+    }
+
+    // Validate execution mode
+    const validModes = ['sequential', 'parallel', 'atomic'];
+    if (!validModes.includes(execution_mode)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid execution_mode. Must be one of: ${validModes.join(', ')}`,
+      });
+    }
+
+    // Validate proof class
+    const validProofClasses = ['on_demand', 'on_cadence'];
+    if (!validProofClasses.includes(proof_class)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid proof_class. Must be one of: ${validProofClasses.join(', ')}`,
+      });
+    }
+
+    // Enrich cross_chain_data with execution mode
+    const enrichedCrossChainData = {
+      ...cross_chain_data,
+      version: '2.0',
+      execution_mode,
+      execution_constraints: {
+        ...cross_chain_data.execution_constraints,
+        mode: execution_mode,
+      },
+    };
+
+    // Generate intent ID if not provided
+    const intentId = intent_data?.intent_id || crypto.randomUUID();
+    const legCount = cross_chain_data.legs.length;
+
+    console.log(`  Intent ID: ${intentId}`);
+    console.log(`  Leg count: ${legCount}`);
+    console.log(`  Execution mode: ${execution_mode}`);
+    console.log(`  Proof class: ${proof_class}`);
+
+    // Group legs by target chain for logging
+    const chainGroups: Record<string, any[]> = {};
+    for (const leg of cross_chain_data.legs) {
+      const chainKey = `${leg.chain}:${leg.chainId || 'unknown'}`;
+      if (!chainGroups[chainKey]) {
+        chainGroups[chainKey] = [];
+      }
+      chainGroups[chainKey].push(leg);
+    }
+    console.log(`  Chain groups: ${Object.keys(chainGroups).join(', ')}`);
+
+    // Use the existing intent creation with enhanced cross-chain data
+    const createRequest: CreateIntentRequest = {
+      intent: {
+        id: intentId,
+        fromChain: 'accumulate',
+        fromChainId: 0,
+        toChain: cross_chain_data.legs[0]?.chain || 'ethereum',
+        toChainId: cross_chain_data.legs[0]?.chainId,
+        fromAddress: cross_chain_data.legs[0]?.from || '',
+        toAddress: cross_chain_data.legs[0]?.to || '',
+        amount: cross_chain_data.legs[0]?.amountEth || '0',
+        tokenSymbol: cross_chain_data.legs[0]?.asset?.symbol || 'ETH',
+        adiUrl: adi_url || governance_data?.organizationAdi || '',
+        initiatedBy: intent_data?.created_by || 'api-bridge',
+        timestamp: Date.now(),
+      },
+      contractAddresses: contract_addresses || {
+        anchor: '0x8398D7EB594bCc608a0210cf206b392d35Ed5339',
+        anchorV2: '0x9B29771EFA2C6645071C589239590b81ae2C5825',
+        abstractAccount: '',
+        entryPoint: '',
+      },
+      proofClass: proof_class as 'on_demand' | 'on_cadence',
+    };
+
+    // Create the intent via the existing service
+    const result = await certenIntentService.createIntent(createRequest, enrichedCrossChainData, governance_data, replay_data);
+
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to create multi-leg intent',
+      });
+    }
+
+    res.json({
+      success: true,
+      intent_id: intentId,
+      operation_id: result.operationId,
+      tx_hash: result.txHash,
+      leg_count: legCount,
+      execution_mode,
+      proof_class,
+      chain_groups: Object.keys(chainGroups).map(key => ({
+        chain_key: key,
+        leg_count: chainGroups[key].length,
+      })),
+      data_account: result.dataAccount,
+      created_at: new Date().toISOString(),
+    });
+
+  } catch (error) {
+    console.error('❌ Multi-leg intent creation failed:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * GET /api/v2/intents/:intentId
+ *
+ * Get a multi-leg intent with all its legs and status.
+ */
+app.get('/api/v2/intents/:intentId', async (req, res) => {
+  console.log('\n📊 GET /api/v2/intents/:intentId');
+
+  try {
+    const intentId = decodeURIComponent(req.params.intentId);
+    console.log(`  Looking up intent: ${intentId}`);
+
+    // Query proof service for intent data
+    const response = await fetch(`${PROOF_SERVICE_URL}/api/v1/intents/${encodeURIComponent(intentId)}`);
+
+    if (!response.ok) {
+      // Try to find by operation ID as fallback
+      const opIdResponse = await fetch(`${PROOF_SERVICE_URL}/api/v1/intents/operation/${encodeURIComponent(intentId)}`);
+
+      if (!opIdResponse.ok) {
+        return res.status(404).json({
+          success: false,
+          error: 'Intent not found',
+        });
+      }
+
+      const intentData = await opIdResponse.json() as Record<string, unknown>;
+      return res.json({
+        success: true,
+        intent: intentData,
+      });
+    }
+
+    const intentData = await response.json() as Record<string, unknown>;
+
+    res.json({
+      success: true,
+      intent: {
+        intent_id: intentData.intent_id,
+        operation_id: intentData.operation_id,
+        status: intentData.status,
+        leg_count: intentData.leg_count,
+        execution_mode: intentData.execution_mode,
+        proof_class: intentData.proof_class,
+        legs_completed: intentData.legs_completed,
+        legs_failed: intentData.legs_failed,
+        legs_pending: intentData.legs_pending,
+        accumulate_tx_hash: intentData.accumulate_tx_hash,
+        created_at: intentData.created_at,
+        completed_at: intentData.completed_at,
+      },
+    });
+
+  } catch (error) {
+    console.warn('⚠️ Intent query failed:', error instanceof Error ? error.message : error);
+    res.status(500).json({
+      success: false,
+      error: 'Intent query failed',
+    });
+  }
+});
+
+/**
+ * GET /api/v2/intents/:intentId/legs
+ *
+ * Get all legs for a multi-leg intent with their individual statuses.
+ */
+app.get('/api/v2/intents/:intentId/legs', async (req, res) => {
+  console.log('\n📊 GET /api/v2/intents/:intentId/legs');
+
+  try {
+    const intentId = decodeURIComponent(req.params.intentId);
+    console.log(`  Looking up legs for intent: ${intentId}`);
+
+    const response = await fetch(`${PROOF_SERVICE_URL}/api/v1/intents/${encodeURIComponent(intentId)}/legs`);
+
+    if (!response.ok) {
+      return res.status(404).json({
+        success: false,
+        error: 'Intent or legs not found',
+      });
+    }
+
+    const legsData = await response.json() as { legs: Record<string, unknown>[] };
+
+    res.json({
+      success: true,
+      intent_id: intentId,
+      legs: legsData.legs?.map((leg: any) => ({
+        leg_id: leg.leg_id,
+        leg_index: leg.leg_index,
+        leg_external_id: leg.leg_external_id,
+        target_chain: leg.target_chain,
+        chain_id: leg.chain_id,
+        role: leg.role,
+        status: leg.status,
+        from_address: leg.from_address,
+        to_address: leg.to_address,
+        amount: leg.amount,
+        token_symbol: leg.token_symbol,
+        execution_tx_hash: leg.execution_tx_hash,
+        execution_block: leg.execution_block,
+        anchor_tx_hash: leg.anchor_tx_hash,
+        created_at: leg.created_at,
+        completed_at: leg.completed_at,
+      })) || [],
+    });
+
+  } catch (error) {
+    console.warn('⚠️ Legs query failed:', error instanceof Error ? error.message : error);
+    res.status(500).json({
+      success: false,
+      error: 'Legs query failed',
+    });
+  }
+});
+
+/**
+ * GET /api/v2/intents/:intentId/legs/:legId
+ *
+ * Get a specific leg by ID within an intent.
+ */
+app.get('/api/v2/intents/:intentId/legs/:legId', async (req, res) => {
+  console.log('\n📊 GET /api/v2/intents/:intentId/legs/:legId');
+
+  try {
+    const intentId = decodeURIComponent(req.params.intentId);
+    const legId = decodeURIComponent(req.params.legId);
+    console.log(`  Looking up leg ${legId} for intent: ${intentId}`);
+
+    const response = await fetch(`${PROOF_SERVICE_URL}/api/v1/intents/${encodeURIComponent(intentId)}/legs/${encodeURIComponent(legId)}`);
+
+    if (!response.ok) {
+      return res.status(404).json({
+        success: false,
+        error: 'Leg not found',
+      });
+    }
+
+    const legData = await response.json() as Record<string, unknown>;
+
+    res.json({
+      success: true,
+      intent_id: intentId,
+      leg: {
+        leg_id: legData.leg_id,
+        leg_index: legData.leg_index,
+        leg_external_id: legData.leg_external_id,
+        target_chain: legData.target_chain,
+        chain_id: legData.chain_id,
+        role: legData.role,
+        sequence_order: legData.sequence_order,
+        depends_on_legs: legData.depends_on_legs,
+        status: legData.status,
+        from_address: legData.from_address,
+        to_address: legData.to_address,
+        amount: legData.amount,
+        token_symbol: legData.token_symbol,
+        execution_tx_hash: legData.execution_tx_hash,
+        execution_block: legData.execution_block,
+        execution_gas_used: legData.execution_gas_used,
+        execution_error: legData.execution_error,
+        batch_id: legData.batch_id,
+        anchor_id: legData.anchor_id,
+        proof_id: legData.proof_id,
+        retry_count: legData.retry_count,
+        max_retries: legData.max_retries,
+        created_at: legData.created_at,
+        completed_at: legData.completed_at,
+      },
+    });
+
+  } catch (error) {
+    console.warn('⚠️ Leg query failed:', error instanceof Error ? error.message : error);
+    res.status(500).json({
+      success: false,
+      error: 'Leg query failed',
+    });
+  }
+});
+
+/**
+ * POST /api/v2/intents/:intentId/retry
+ *
+ * Retry failed legs for a multi-leg intent.
+ */
+app.post('/api/v2/intents/:intentId/retry', async (req, res) => {
+  console.log('\n🔄 POST /api/v2/intents/:intentId/retry');
+
+  try {
+    const intentId = decodeURIComponent(req.params.intentId);
+    const { leg_ids } = req.body; // Optional: specific legs to retry
+
+    console.log(`  Retrying legs for intent: ${intentId}`);
+    if (leg_ids && leg_ids.length > 0) {
+      console.log(`  Specific legs: ${leg_ids.join(', ')}`);
+    } else {
+      console.log(`  Retrying all failed legs`);
+    }
+
+    // Proxy to proof service
+    const response = await fetch(`${PROOF_SERVICE_URL}/api/v1/intents/${encodeURIComponent(intentId)}/retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leg_ids }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json() as Record<string, unknown>;
+      return res.status(response.status).json({
+        success: false,
+        error: errorData.error || 'Retry failed',
+      });
+    }
+
+    const result = await response.json() as Record<string, unknown>;
+
+    res.json({
+      success: true,
+      intent_id: intentId,
+      legs_retried: result.legs_retried,
+      message: result.message || 'Failed legs queued for retry',
+    });
+
+  } catch (error) {
+    console.warn('⚠️ Retry request failed:', error instanceof Error ? error.message : error);
+    res.status(500).json({
+      success: false,
+      error: 'Retry request failed',
+    });
+  }
+});
+
+/**
+ * GET /api/v2/intents/:intentId/chain-groups
+ *
+ * Get chain groups for a multi-leg intent (legs grouped by target chain).
+ */
+app.get('/api/v2/intents/:intentId/chain-groups', async (req, res) => {
+  console.log('\n📊 GET /api/v2/intents/:intentId/chain-groups');
+
+  try {
+    const intentId = decodeURIComponent(req.params.intentId);
+    console.log(`  Looking up chain groups for intent: ${intentId}`);
+
+    const response = await fetch(`${PROOF_SERVICE_URL}/api/v1/intents/${encodeURIComponent(intentId)}/chain-groups`);
+
+    if (!response.ok) {
+      return res.status(404).json({
+        success: false,
+        error: 'Intent or chain groups not found',
+      });
+    }
+
+    const groupsData = await response.json() as { chain_groups: Record<string, unknown>[] };
+
+    res.json({
+      success: true,
+      intent_id: intentId,
+      chain_groups: groupsData.chain_groups?.map((group: any) => ({
+        group_id: group.group_id,
+        chain_key: group.chain_key,
+        target_chain: group.target_chain,
+        chain_id: group.chain_id,
+        leg_count: group.leg_count,
+        status: group.status,
+        batch_id: group.batch_id,
+        anchor_id: group.anchor_id,
+        anchor_tx_hash: group.anchor_tx_hash,
+        anchor_block: group.anchor_block,
+        created_at: group.created_at,
+        anchored_at: group.anchored_at,
+        completed_at: group.completed_at,
+      })) || [],
+    });
+
+  } catch (error) {
+    console.warn('⚠️ Chain groups query failed:', error instanceof Error ? error.message : error);
+    res.status(500).json({
+      success: false,
+      error: 'Chain groups query failed',
+    });
+  }
+});
+
 // Error handling middleware
 app.use((error: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Unhandled error:', error);

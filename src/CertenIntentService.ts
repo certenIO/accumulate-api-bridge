@@ -83,6 +83,38 @@ export interface ReplayProtection {
 // Proof class determines routing: on_demand (immediate) or on_cadence (batched)
 export type ProofClass = 'on_demand' | 'on_cadence';
 
+// Execution mode for multi-leg intents
+export type ExecutionMode = 'sequential' | 'parallel' | 'atomic';
+
+// Single leg definition for multi-leg intents
+export interface IntentLeg {
+  legId: string;
+  role: 'source' | 'destination' | 'payment' | 'swap';
+  chain: string;
+  chainId: number;
+  fromAddress: string;
+  toAddress: string;
+  amount: string;
+  amountWei?: string;
+  tokenSymbol?: string;
+  tokenAddress?: string;
+  sequenceOrder?: number;
+  dependsOnLegs?: string[];
+  maxRetries?: number;
+  priority?: number;
+}
+
+// Multi-leg transaction intent interface
+export interface MultiLegTransactionIntent {
+  id: string;
+  legs: IntentLeg[];
+  adiUrl: string;
+  initiatedBy: string;
+  timestamp: number;
+  executionMode?: ExecutionMode;
+  description?: string;
+}
+
 // Intent creation request interface
 export interface CreateIntentRequest {
   intent: CertenTransactionIntent;
@@ -91,6 +123,17 @@ export interface CreateIntentRequest {
   validationRules?: Partial<ValidationRules>;
   expirationMinutes?: number;
   proofClass?: ProofClass;  // Optional: defaults to 'on_demand'
+}
+
+// Multi-leg intent creation request interface
+export interface CreateMultiLegIntentRequest {
+  intent: MultiLegTransactionIntent;
+  contractAddresses: ContractAddresses;
+  executionParameters?: Partial<ExecutionParameters>;
+  validationRules?: Partial<ValidationRules>;
+  expirationMinutes?: number;
+  proofClass?: ProofClass;
+  executionMode?: ExecutionMode;
 }
 
 // Intent creation response interface
@@ -207,6 +250,384 @@ export class CertenIntentService {
         error: error instanceof Error ? error.message : 'Unknown error'
       };
     }
+  }
+
+  /**
+   * Creates a multi-leg Certen transaction intent and writes it to Accumulate
+   * Supports 1-N legs targeting same or different chains
+   */
+  async createMultiLegTransactionIntent(
+    request: CreateMultiLegIntentRequest,
+    adiPrivateKey: string,
+    signerKeyPageUrl?: string
+  ): Promise<CreateIntentResponse> {
+    try {
+      this.logger.info('🎯 Creating multi-leg Certen transaction intent', {
+        intentId: request.intent.id,
+        legCount: request.intent.legs.length,
+        executionMode: request.executionMode || 'sequential'
+      });
+
+      // Validate multi-leg intent
+      const validationResult = this.validateMultiLegIntent(request.intent);
+      if (!validationResult.isValid) {
+        return {
+          success: false,
+          error: `Multi-leg intent validation failed: ${validationResult.errors.join(', ')}`
+        };
+      }
+
+      // Generate multi-leg data entries
+      const dataEntries = this.createMultiLegDataEntryPayload(
+        request.intent,
+        request.contractAddresses,
+        request.validationRules,
+        request.expirationMinutes,
+        request.proofClass || 'on_demand',
+        request.executionMode || 'sequential'
+      );
+
+      // Extract ADI and data account names
+      const adiUrl = request.intent.adiUrl;
+      const adiName = this.extractAdiName(adiUrl);
+      const dataAccountName = 'data';
+
+      this.logger.info('📝 Writing multi-leg intent to Accumulate blockchain', {
+        adiName,
+        dataAccountName,
+        memo: CERTEN_INTENT_MEMO,
+        dataEntriesCount: dataEntries.length,
+        legCount: request.intent.legs.length
+      });
+
+      // Write intent to Accumulate
+      const result = await this.writeIntentWithMemo(
+        adiName,
+        dataAccountName,
+        dataEntries,
+        CERTEN_INTENT_MEMO,
+        adiPrivateKey,
+        signerKeyPageUrl
+      );
+
+      if (result.success) {
+        this.logger.info('✅ Multi-leg Certen intent created successfully', {
+          intentId: request.intent.id,
+          txHash: result.txHash,
+          legCount: request.intent.legs.length,
+          dataAccount: `${adiUrl}/${dataAccountName}`
+        });
+
+        return {
+          success: true,
+          txHash: result.txHash,
+          intentId: request.intent.id,
+          dataAccount: `acc://${adiName}.acme/${dataAccountName}`
+        };
+      } else {
+        throw new Error(result.error || 'Failed to write multi-leg intent to Accumulate');
+      }
+
+    } catch (error) {
+      this.logger.error('❌ Failed to create multi-leg Certen intent', { error });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Validates a multi-leg Certen transaction intent
+   */
+  private validateMultiLegIntent(intent: MultiLegTransactionIntent): { isValid: boolean; errors: string[] } {
+    const errors: string[] = [];
+
+    // Required field validation
+    if (!intent.id) errors.push('Intent ID is required');
+    if (!intent.adiUrl) errors.push('ADI URL is required');
+    if (!intent.initiatedBy) errors.push('Initiated by is required');
+    if (!intent.legs || intent.legs.length === 0) errors.push('At least one leg is required');
+
+    // Format validation
+    if (intent.id && !this.isValidUUID(intent.id)) {
+      errors.push('Intent ID must be a valid UUID');
+    }
+
+    if (intent.adiUrl && !intent.adiUrl.startsWith('acc://')) {
+      errors.push('ADI URL must start with acc://');
+    }
+
+    // Validate each leg
+    if (intent.legs) {
+      intent.legs.forEach((leg, index) => {
+        if (!leg.legId) errors.push(`Leg ${index}: legId is required`);
+        if (!leg.chain) errors.push(`Leg ${index}: chain is required`);
+        if (!leg.fromAddress) errors.push(`Leg ${index}: fromAddress is required`);
+        if (!leg.toAddress) errors.push(`Leg ${index}: toAddress is required`);
+        if (!leg.amount) errors.push(`Leg ${index}: amount is required`);
+
+        if (leg.amount && !this.isValidAmount(leg.amount)) {
+          errors.push(`Leg ${index}: amount must be a valid number`);
+        }
+
+        if (leg.fromAddress && !this.isValidAddress(leg.fromAddress)) {
+          errors.push(`Leg ${index}: fromAddress format is invalid`);
+        }
+
+        if (leg.toAddress && !this.isValidAddress(leg.toAddress)) {
+          errors.push(`Leg ${index}: toAddress format is invalid`);
+        }
+      });
+
+      // Validate leg dependencies
+      const legIds = new Set(intent.legs.map(l => l.legId));
+      intent.legs.forEach((leg, index) => {
+        if (leg.dependsOnLegs) {
+          for (const depId of leg.dependsOnLegs) {
+            if (!legIds.has(depId)) {
+              errors.push(`Leg ${index}: depends on unknown leg ${depId}`);
+            }
+            if (depId === leg.legId) {
+              errors.push(`Leg ${index}: cannot depend on itself`);
+            }
+          }
+        }
+      });
+    }
+
+    return {
+      isValid: errors.length === 0,
+      errors
+    };
+  }
+
+  /**
+   * Creates the DoubleHashDataEntry payload for multi-leg intents
+   * Uses version 2.0 format with multiple legs in crossChainData
+   */
+  private createMultiLegDataEntryPayload(
+    intent: MultiLegTransactionIntent,
+    contractAddresses: ContractAddresses,
+    validationRules?: Partial<ValidationRules>,
+    expirationMinutes: number = 95,
+    proofClass: ProofClass = 'on_demand',
+    executionMode: ExecutionMode = 'sequential'
+  ): string[] {
+    // data[0]: intentData - Protocol v2.0 for multi-leg
+    const intentData = {
+      "kind": "CERTEN_INTENT",
+      "version": "2.0",  // Multi-leg version
+      "proof_class": proofClass,
+      "intentType": intent.legs.length === 1 ? "single_leg_cross_chain_transfer" : "multi_leg_cross_chain_transfer",
+      "description": intent.description || `Multi-leg transfer with ${intent.legs.length} legs`,
+      "organizationAdi": intent.adiUrl,
+      "initiator": {
+        "adi": intent.adiUrl,
+        "by": intent.initiatedBy,
+        "role": "organization_operator"
+      },
+      "priority": "high",
+      "risk_level": "medium",
+      "compliance_required": false,
+      "leg_count": intent.legs.length,
+      "execution_mode": executionMode,
+      "intent_id": intent.id,
+      "created_by": intent.initiatedBy,
+      "created_at": new Date(intent.timestamp).toISOString(),
+      "intent_class": "financial_transfer",
+      "regulatory_jurisdiction": "global",
+      "tags": ["multi-leg", executionMode]
+    };
+
+    // data[1]: crossChainData - Protocol v2.0 with multiple legs
+    const legs = intent.legs.map((leg, index) => ({
+      "legId": leg.legId,
+      "role": leg.role || "destination",
+      "chain": leg.chain.toLowerCase(),
+      "chainId": leg.chainId,
+      "network": leg.chain.toLowerCase(),
+      "asset": {
+        "symbol": leg.tokenSymbol || "ETH",
+        "decimals": 18,
+        "native": !leg.tokenAddress,
+        "contract_address": leg.tokenAddress || null,
+        "verified": true
+      },
+      "from": leg.fromAddress,
+      "to": leg.toAddress,
+      "amountEth": leg.amount,
+      "amountWei": leg.amountWei || this.convertEthToWei(leg.amount),
+      "sequence_order": leg.sequenceOrder ?? index,
+      "depends_on_legs": leg.dependsOnLegs || [],
+      "max_retries": leg.maxRetries || 3,
+      "priority": leg.priority || 0,
+      "execution_sequence": index + 1,
+      "conditional_execution": (leg.dependsOnLegs?.length ?? 0) > 0,
+      "rollback_conditions": {
+        "timeout_seconds": 3600,
+        "failure_modes": ["gas_limit_exceeded", "insufficient_balance"]
+      },
+      "anchorContract": {
+        "address": contractAddresses.anchor,
+        "functionSelector": "createAnchorWithLegs(bytes32,bytes32,bytes32,uint8,(bytes32,uint8,address,address,uint256,bytes32)[])",
+        "version": "v4.0"  // V4 for multi-leg support
+      },
+      "gasPolicy": {
+        "maxFeePerGasGwei": "20",
+        "maxPriorityFeePerGasGwei": "2",
+        "gasLimit": 100000,
+        "payer": "from",
+        "gas_estimation_buffer": 1.2
+      },
+      "slippage_tolerance": "0.5%",
+      "deadline_timestamp": Math.floor(Date.now() / 1000) + 3600
+    }));
+
+    // Build leg dependencies for crossChainData
+    const legDependencies = intent.legs
+      .filter(leg => leg.dependsOnLegs && leg.dependsOnLegs.length > 0)
+      .map(leg => ({
+        legId: leg.legId,
+        dependsOn: leg.dependsOnLegs,
+        condition: "success"
+      }));
+
+    const crossChainData = {
+      "protocol": "CERTEN",
+      "version": "2.0",  // Multi-leg version
+      "operationGroupId": intent.id,
+      "legs": legs,
+      "execution_mode": executionMode,
+      "leg_dependencies": legDependencies,
+      "rollback_policy": {
+        "mode": executionMode === 'atomic' ? "rollback_all" : "continue_on_failure",
+        "partial_execution_allowed": executionMode !== 'atomic'
+      },
+      "timeout_policy": {
+        "per_leg_timeout_seconds": 3600,
+        "total_timeout_seconds": 3600 * intent.legs.length,
+        "grace_period_seconds": 300
+      },
+      "atomicity": {
+        "mode": executionMode === 'atomic' ? "all_or_nothing" : "best_effort",
+        "rollback_strategy": executionMode === 'atomic' ? "all_or_nothing" : "partial_allowed",
+        "partial_execution_allowed": executionMode !== 'atomic'
+      },
+      "execution_constraints": {
+        "mode": executionMode,
+        "max_execution_time_seconds": 3600 * intent.legs.length,
+        "required_confirmations": 1,
+        "parallel_execution": executionMode === 'parallel'
+      },
+      "cross_chain_routing": {
+        "bridge_type": "certen_anchor_v4",
+        "relay_mechanism": "proof_based",
+        "finality_requirements": "fast"
+      }
+    };
+
+    // data[2]: governanceData
+    const governanceData = {
+      "organizationAdi": intent.adiUrl,
+      "authorization": {
+        "required_key_book": `${intent.adiUrl}/book`,
+        "required_key_page": `${intent.adiUrl}/book/page`,
+        "signature_threshold": 1,
+        "required_signers": [`${intent.adiUrl}/book`],
+        "roles": [
+          {
+            "role": "DEFAULT_SIGNER",
+            "keyPage": `${intent.adiUrl}/book/page`
+          }
+        ],
+        "authorization_hash": this.calculateMultiLegAuthorizationHash(intent)
+      },
+      "validation_rules": {
+        "max_amount": validationRules?.maxAmount || "10.0",
+        "daily_limit": validationRules?.dailyLimit || "100.0",
+        "requires_approval": validationRules?.requiresApproval || false,
+        "risk_level": "medium"
+      },
+      "compliance_checks": {
+        "aml_required": false,
+        "kyc_verified": true,
+        "sanctions_check": "passed",
+        "jurisdiction": "compliant"
+      }
+    };
+
+    // data[3]: replayData
+    const nowMs = Date.now();
+    const nowSeconds = Math.floor(nowMs / 1000);
+    const nonce = `certen_multileg_${nowMs}_${Math.random().toString(36).substring(7)}`;
+    const expiresAtSeconds = nowSeconds + (expirationMinutes * 60);
+
+    const replayData = {
+      "nonce": nonce,
+      "created_at": nowSeconds,
+      "expires_at": expiresAtSeconds,
+      "intent_hash": "",
+      "chain_nonces": this.buildChainNonces(intent.legs),
+      "execution_window": {
+        "start_time": nowSeconds,
+        "end_time": expiresAtSeconds,
+        "grace_period_minutes": 5,
+        "max_retries": 3
+      },
+      "security": {
+        "double_spending_protection": true,
+        "replay_attack_prevention": true,
+        "temporal_validation": "strict",
+        "nonce_validation": "required"
+      }
+    };
+
+    // Calculate operation_id from all 4 JSON blobs
+    const operationId = this.calculateOperationIdFromBlobs(
+      intentData,
+      crossChainData,
+      governanceData,
+      replayData
+    );
+
+    // Update replayData with the calculated operation_id
+    replayData.intent_hash = operationId;
+
+    return [
+      JSON.stringify(intentData),
+      JSON.stringify(crossChainData),
+      JSON.stringify(governanceData),
+      JSON.stringify(replayData)
+    ];
+  }
+
+  /**
+   * Builds chain nonces for all unique chains in legs
+   */
+  private buildChainNonces(legs: IntentLeg[]): Record<string, string> {
+    const nonces: Record<string, string> = { "accumulated": "1" };
+    const seenChains = new Set<string>();
+
+    for (const leg of legs) {
+      const chainKey = leg.chain.toLowerCase();
+      if (!seenChains.has(chainKey)) {
+        nonces[chainKey] = "latest";
+        seenChains.add(chainKey);
+      }
+    }
+
+    return nonces;
+  }
+
+  /**
+   * Calculates authorization hash for multi-leg intent
+   */
+  private calculateMultiLegAuthorizationHash(intent: MultiLegTransactionIntent): string {
+    const authData = intent.legs.map(leg =>
+      `TRANSFER_${leg.amount}_${leg.tokenSymbol || 'ETH'}_TO_${leg.toAddress}`
+    ).join('|');
+    return '0x' + crypto.createHash('sha256').update(authData).digest('hex');
   }
 
   /**
