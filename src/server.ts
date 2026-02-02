@@ -534,6 +534,157 @@ app.post('/api/v1/keybook/create', async (req, res) => {
   }
 });
 
+// =============================================================================
+// TWO-PHASE SIGNING FOR KEYBOOK CREATION (Key Vault integration)
+// =============================================================================
+
+/**
+ * Prepare a KeyBook creation transaction for Key Vault signing.
+ * Phase 1: Returns the hash that needs to be signed by the Key Vault.
+ */
+app.post('/api/v1/keybook/create/prepare', async (req, res) => {
+  try {
+    const { adiName, keyBookName, adiUrl, keyBookUrl, publicKeyHash, signerPublicKey, signerKeypageUrl } = req.body;
+
+    // Extract ADI name from adiUrl if adiName is not provided
+    let finalAdiName = adiName;
+    if (!finalAdiName && adiUrl) {
+      finalAdiName = adiUrl.replace('acc://', '');
+    }
+
+    // Extract keybook name from keyBookUrl if keyBookName is not provided
+    let finalKeyBookName = keyBookName;
+    if (!finalKeyBookName && keyBookUrl) {
+      const parts = keyBookUrl.split('/');
+      finalKeyBookName = parts[parts.length - 1];
+    }
+
+    if (!finalAdiName) {
+      return res.status(400).json({
+        success: false,
+        error: 'ADI name or adiUrl is required'
+      });
+    }
+
+    if (!finalKeyBookName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Key book name or keyBookUrl is required'
+      });
+    }
+
+    if (!publicKeyHash) {
+      return res.status(400).json({
+        success: false,
+        error: 'Public key hash is required (for the new KeyBook)'
+      });
+    }
+
+    if (!signerPublicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Signer public key is required for Key Vault signing'
+      });
+    }
+
+    console.log(`🔐 Preparing KeyBook creation for Key Vault signing: ${finalKeyBookName} under ADI: ${finalAdiName}`);
+
+    const result = await accumulateService.prepareKeyBookCreate(
+      finalAdiName,
+      finalKeyBookName,
+      publicKeyHash,
+      signerPublicKey,
+      signerKeypageUrl
+    );
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    res.json({
+      success: true,
+      request_id: result.requestId,
+      transaction_hash: result.transactionHash,
+      hash_to_sign: result.hashToSign,
+      signer_key_page_url: result.signerKeyPageUrl,
+      key_page_version: result.keyPageVersion,
+      adi_url: result.adiUrl,
+      key_book_url: result.keyBookUrl
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to prepare KeyBook creation:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * Submit a prepared KeyBook creation with a signature from Key Vault.
+ * Phase 2: Submits the transaction with the external signature.
+ */
+app.post('/api/v1/keybook/create/submit-signed', async (req, res) => {
+  try {
+    const { requestId, signature, publicKey } = req.body;
+
+    if (!requestId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Request ID is required'
+      });
+    }
+
+    if (!signature) {
+      return res.status(400).json({
+        success: false,
+        error: 'Signature is required'
+      });
+    }
+
+    if (!publicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Public key is required'
+      });
+    }
+
+    console.log(`📤 Submitting signed KeyBook creation: ${requestId}`);
+
+    const result = await accumulateService.submitKeyBookCreateWithExternalSignature(
+      requestId,
+      signature,
+      publicKey
+    );
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    res.json({
+      success: true,
+      tx_id: result.txId,
+      tx_hash: result.txHash,
+      adi_url: result.adiUrl,
+      key_book_url: result.keyBookUrl
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to submit signed KeyBook creation:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 // Create data account endpoint (real implementation)
 app.post('/api/v1/data-account/create', async (req, res) => {
   try {
@@ -713,6 +864,140 @@ app.post('/api/v1/keypage/create', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Failed to create keypage:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// =============================================================================
+// TWO-PHASE SIGNING FOR KEYPAGE CREATION (Key Vault integration)
+// =============================================================================
+
+/**
+ * Prepare a KeyPage creation transaction for Key Vault signing.
+ * Phase 1: Returns the hash that needs to be signed by the Key Vault.
+ */
+app.post('/api/v1/keypage/create/prepare', async (req, res) => {
+  try {
+    const { keyBookUrl, publicKeyHash, keys, signerPublicKey, signerKeypageUrl } = req.body;
+
+    if (!keyBookUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'Key book URL is required'
+      });
+    }
+
+    if (!signerPublicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Signer public key is required for Key Vault signing'
+      });
+    }
+
+    // Get the key hash for the new KeyPage
+    let newKeyPageKeyHash = publicKeyHash;
+    if (!newKeyPageKeyHash && keys && Array.isArray(keys) && keys.length > 0) {
+      newKeyPageKeyHash = keys[0].keyHash;
+    }
+
+    if (!newKeyPageKeyHash) {
+      return res.status(400).json({
+        success: false,
+        error: 'Public key hash is required (for the new KeyPage)'
+      });
+    }
+
+    console.log(`🔐 Preparing KeyPage creation for Key Vault signing in KeyBook: ${keyBookUrl}`);
+
+    const result = await accumulateService.prepareKeyPageCreate(
+      keyBookUrl,
+      newKeyPageKeyHash,
+      signerPublicKey,
+      signerKeypageUrl
+    );
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    res.json({
+      success: true,
+      request_id: result.requestId,
+      transaction_hash: result.transactionHash,
+      hash_to_sign: result.hashToSign,
+      signer_key_page_url: result.signerKeyPageUrl,
+      key_page_version: result.keyPageVersion,
+      key_book_url: result.keyBookUrl
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to prepare KeyPage creation:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * Submit a prepared KeyPage creation with a signature from Key Vault.
+ * Phase 2: Submits the transaction with the external signature.
+ */
+app.post('/api/v1/keypage/create/submit-signed', async (req, res) => {
+  try {
+    const { requestId, signature, publicKey } = req.body;
+
+    if (!requestId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Request ID is required'
+      });
+    }
+
+    if (!signature) {
+      return res.status(400).json({
+        success: false,
+        error: 'Signature is required'
+      });
+    }
+
+    if (!publicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Public key is required'
+      });
+    }
+
+    console.log(`📤 Submitting signed KeyPage creation: ${requestId}`);
+
+    const result = await accumulateService.submitKeyPageCreateWithExternalSignature(
+      requestId,
+      signature,
+      publicKey
+    );
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    res.json({
+      success: true,
+      tx_id: result.txId,
+      tx_hash: result.txHash,
+      key_book_url: result.keyBookUrl
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to submit signed KeyPage creation:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
