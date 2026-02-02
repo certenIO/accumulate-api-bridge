@@ -1058,4 +1058,210 @@ export class CertenIntentService {
     // Remove leading zeros and return
     return BigInt(weiString).toString();
   }
+
+  // ==========================================================================
+  // TWO-PHASE SIGNING METHODS (for Key Vault external signing)
+  // ==========================================================================
+
+  /**
+   * Prepare response interface for two-phase signing
+   */
+  // Note: PrepareMultiLegIntentResponse is defined below
+
+  /**
+   * Prepares a multi-leg Certen transaction intent for external signing (Phase 1)
+   * Returns the hash to sign via Key Vault - does NOT sign or submit
+   *
+   * @param request - The multi-leg intent request
+   * @param publicKey - The public key from Key Vault (required for hash computation)
+   * @param signerKeyPageUrl - Optional signer key page URL
+   * @returns PrepareMultiLegIntentResponse with hashToSign for Key Vault signing
+   */
+  async prepareMultiLegTransactionIntent(
+    request: CreateMultiLegIntentRequest,
+    publicKey: string,
+    signerKeyPageUrl?: string
+  ): Promise<PrepareMultiLegIntentResponse> {
+    try {
+      this.logger.info('🎯 Preparing multi-leg Certen transaction intent (Two-Phase Signing)', {
+        intentId: request.intent.id,
+        legCount: request.intent.legs.length,
+        executionMode: request.executionMode || 'sequential',
+        hasPublicKey: !!publicKey
+      });
+
+      // Validate public key is provided (required for two-phase signing)
+      if (!publicKey) {
+        return {
+          success: false,
+          error: 'publicKey is required for two-phase signing (from Key Vault)'
+        };
+      }
+
+      // Validate multi-leg intent
+      const validationResult = this.validateMultiLegIntent(request.intent);
+      if (!validationResult.isValid) {
+        return {
+          success: false,
+          error: `Multi-leg intent validation failed: ${validationResult.errors.join(', ')}`
+        };
+      }
+
+      // Generate multi-leg data entries (same as createMultiLegTransactionIntent)
+      const dataEntries = this.createMultiLegDataEntryPayload(
+        request.intent,
+        request.contractAddresses,
+        request.validationRules,
+        request.expirationMinutes,
+        request.proofClass || 'on_demand',
+        request.executionMode || 'sequential'
+      );
+
+      // Extract ADI and data account names
+      const adiUrl = request.intent.adiUrl;
+      const adiName = this.extractAdiName(adiUrl);
+      const dataAccountName = 'data';
+
+      this.logger.info('📝 Preparing multi-leg intent for external signing', {
+        adiName,
+        dataAccountName,
+        memo: CERTEN_INTENT_MEMO,
+        dataEntriesCount: dataEntries.length,
+        legCount: request.intent.legs.length
+      });
+
+      // Prepare transaction without signing - pass publicKey for proper hash computation
+      const result = await this.accumulateService.prepareWriteData(
+        adiName,
+        dataAccountName,
+        dataEntries,
+        signerKeyPageUrl,
+        CERTEN_INTENT_MEMO,
+        publicKey  // Required for computing initiator and proper hash to sign
+      );
+
+      if (result.success) {
+        this.logger.info('✅ Multi-leg intent prepared for signing', {
+          requestId: result.requestId,
+          transactionHash: result.transactionHash,
+          hashToSign: result.hashToSign,
+          legCount: request.intent.legs.length
+        });
+
+        return {
+          success: true,
+          requestId: result.requestId,
+          transactionHash: result.transactionHash,
+          hashToSign: result.hashToSign,  // THIS is what Key Vault should sign!
+          signerKeyPageUrl: result.signerKeyPageUrl,
+          keyPageVersion: result.keyPageVersion,
+          intentId: request.intent.id,
+          legCount: request.intent.legs.length,
+          executionMode: request.executionMode || 'sequential',
+          dataAccount: `acc://${adiName}.acme/${dataAccountName}`,
+          message: 'Multi-leg intent prepared. Sign the hashToSign with Key Vault and call /api/v2/intents/submit-signed'
+        };
+      } else {
+        throw new Error(result.error || 'Failed to prepare multi-leg intent');
+      }
+
+    } catch (error) {
+      this.logger.error('❌ Failed to prepare multi-leg Certen intent', { error });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Submits a prepared multi-leg intent with external signature (Phase 2)
+   *
+   * @param requestId - The request ID from prepareMultiLegTransactionIntent
+   * @param signature - The signature from Key Vault
+   * @param publicKey - The public key from Key Vault
+   * @returns CreateIntentResponse with txHash
+   */
+  async submitMultiLegWithExternalSignature(
+    requestId: string,
+    signature: string,
+    publicKey: string
+  ): Promise<CreateIntentResponse> {
+    try {
+      this.logger.info('📤 Submitting multi-leg intent with external signature (Two-Phase Signing)', {
+        requestId,
+        hasSignature: !!signature,
+        hasPublicKey: !!publicKey
+      });
+
+      // Validate required fields
+      if (!requestId) {
+        return {
+          success: false,
+          error: 'requestId is required (from /api/v2/intents/prepare)'
+        };
+      }
+
+      if (!signature) {
+        return {
+          success: false,
+          error: 'signature is required (from Key Vault)'
+        };
+      }
+
+      if (!publicKey) {
+        return {
+          success: false,
+          error: 'publicKey is required (from Key Vault)'
+        };
+      }
+
+      // Submit with external signature
+      const result = await this.accumulateService.submitWithExternalSignature(
+        requestId,
+        signature,
+        publicKey
+      );
+
+      if (result.success) {
+        this.logger.info('✅ Multi-leg intent submitted with Key Vault signature', {
+          txHash: result.txHash,
+          signatureTxHash: result.signatureTxHash,
+          dataTransactionHash: result.dataTransactionHash
+        });
+
+        return {
+          success: true,
+          txHash: result.txHash,
+          roundId: result.signatureTxHash,
+          dataAccount: result.dataAccountUrl
+        };
+      } else {
+        throw new Error(result.error || 'Failed to submit multi-leg intent');
+      }
+
+    } catch (error) {
+      this.logger.error('❌ Failed to submit multi-leg intent with external signature', { error });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+}
+
+// Export prepare response interface
+export interface PrepareMultiLegIntentResponse {
+  success: boolean;
+  requestId?: string;
+  transactionHash?: string;
+  hashToSign?: string;
+  signerKeyPageUrl?: string;
+  keyPageVersion?: number;
+  intentId?: string;
+  legCount?: number;
+  executionMode?: string;
+  dataAccount?: string;
+  message?: string;
+  error?: string;
 }

@@ -289,6 +289,73 @@ export class AccumulateService {
 
       this.logger.info('📄 Creating data account with fixed service', { dataAccountUrl });
 
+      // Create the signing key from the same private key used to create the ADI
+      const lidPrivateKey = process.env.ACCUM_PRIV_KEY?.substring(0, 64) || '';
+      const privateKeyBytes = Buffer.from(lidPrivateKey, 'hex');
+      const keypageKey = ED25519Key.from(privateKeyBytes);
+      const signingKeyHash = Buffer.from(keypageKey.address.publicKeyHash).toString('hex');
+
+      this.logger.info('🔑 Signing key details:', {
+        keyPageUrl,
+        signingKeyHash: signingKeyHash.substring(0, 16) + '...',
+        privateKeyLength: lidPrivateKey.length
+      });
+
+      // Query the key page to verify our key is authorized and get the correct version
+      let keyPageData: any;
+      let currentVersion = 1;
+      let keyPageKeys: string[] = [];
+
+      try {
+        keyPageData = await this.client.query(keyPageUrl);
+        currentVersion = keyPageData.account?.version || 1;
+
+        // Extract key hashes from the key page
+        const keys = keyPageData.account?.keys || keyPageData.data?.keys || [];
+        keyPageKeys = keys.map((k: any) => {
+          if (k.publicKeyHash) {
+            return Buffer.from(k.publicKeyHash).toString('hex');
+          }
+          if (k.keyHash) {
+            return Buffer.from(k.keyHash).toString('hex');
+          }
+          return null;
+        }).filter(Boolean);
+
+        this.logger.info('🔍 KeyPage verification:', {
+          keyPageUrl,
+          version: currentVersion,
+          keyCount: keyPageKeys.length,
+          keys: keyPageKeys.map((k: string) => k.substring(0, 16) + '...'),
+          creditBalance: keyPageData.account?.creditBalance || 0
+        });
+
+        // Verify our signing key is on the key page
+        const keyIsAuthorized = keyPageKeys.some((k: string) =>
+          k.toLowerCase() === signingKeyHash.toLowerCase()
+        );
+
+        if (!keyIsAuthorized && keyPageKeys.length > 0) {
+          this.logger.error('❌ Signing key not found on key page!', {
+            signingKeyHash: signingKeyHash.substring(0, 16) + '...',
+            authorizedKeys: keyPageKeys.map((k: string) => k.substring(0, 16) + '...')
+          });
+          throw new Error(`Signing key ${signingKeyHash.substring(0, 16)}... is not authorized on key page. Authorized keys: ${keyPageKeys.map((k: string) => k.substring(0, 16) + '...').join(', ')}`);
+        }
+
+        if (keyIsAuthorized) {
+          this.logger.info('✅ Signing key verified on key page');
+        }
+      } catch (queryError) {
+        // If query fails, log and try to proceed with default version
+        this.logger.warn('⚠️ Could not query key page, proceeding with default version:', {
+          error: queryError instanceof Error ? queryError.message : String(queryError)
+        });
+      }
+
+      // Add a small delay to ensure network consistency after any recent changes
+      await new Promise(resolve => setTimeout(resolve, 500));
+
       // Use the ADI as principal (not the keypage) following comprehensive example
       const transaction = new core.Transaction({
         header: {
@@ -300,19 +367,16 @@ export class AccumulateService {
         },
       });
 
-      // Get current key page version following comprehensive example
-      const currentVersion = await this.getKeyPageVersion(keyPageUrl);
-
-      // Create ADI signer exactly like comprehensive example
-      // Use the LID's private key to create a keypage signer with current version
-      const lidPrivateKey = process.env.ACCUM_PRIV_KEY?.substring(0, 64) || '';
-      const privateKeyBytes = Buffer.from(lidPrivateKey, 'hex');
-      const keypageKey = ED25519Key.from(privateKeyBytes);
+      // Create ADI signer with verified version
       const adiSigner = Signer.forPage(keyPageUrl, keypageKey).withVersion(currentVersion);
 
       // Sign with fresh timestamp
       const timestamp = this.getNextTimestamp();
-      this.logger.info('🕐 Using fresh timestamp for data account', { timestamp });
+      this.logger.info('🕐 Signing data account creation:', {
+        timestamp,
+        version: currentVersion,
+        signerUrl: keyPageUrl
+      });
 
       const signature = await adiSigner.sign(transaction, { timestamp });
 
@@ -1683,6 +1747,13 @@ export class AccumulateService {
       const publicKeyHashBytes = sponsorKey.address.publicKeyHash;
       const sponsorKeyHash = Buffer.from(publicKeyHashBytes).toString('hex');
 
+      this.logger.info('🔑 Sponsor key details for ADI creation:', {
+        privateKeyLength: privateKeyHex.length,
+        sponsorKeyHash: sponsorKeyHash,
+        publicKeyHashBytesLength: publicKeyHashBytes.length,
+        keyType: sponsorKey.address.type
+      });
+
       // Create the ADI with sponsor's key
       const transaction = new core.Transaction({
         header: {
@@ -1714,12 +1785,54 @@ export class AccumulateService {
 
       this.logger.info('✅ ADI created for onboarding', {
         adiUrl,
-        sponsorKeyHash: sponsorKeyHash.substring(0, 16) + '...'
+        sponsorKeyHash: sponsorKeyHash
       });
 
       // Wait for ADI to propagate
       this.logger.info('⏳ Waiting for ADI to propagate...');
       await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // Verify the key page was created with the correct key
+      try {
+        const keyPageQuery = await this.client.query(keyPageUrl);
+        const keys = keyPageQuery.account?.keys || keyPageQuery.data?.keys || [];
+        const storedKeyHashes = keys.map((k: any) => {
+          if (k.publicKeyHash) {
+            return Buffer.from(k.publicKeyHash).toString('hex');
+          }
+          if (k.keyHash) {
+            return Buffer.from(k.keyHash).toString('hex');
+          }
+          return null;
+        }).filter(Boolean);
+
+        this.logger.info('🔍 Key page verification after ADI creation:', {
+          keyPageUrl,
+          version: keyPageQuery.account?.version,
+          creditBalance: keyPageQuery.account?.creditBalance,
+          storedKeyCount: storedKeyHashes.length,
+          storedKeys: storedKeyHashes,
+          expectedKey: sponsorKeyHash
+        });
+
+        // Check if sponsor key is on the page
+        const keyMatch = storedKeyHashes.some((k: string) =>
+          k.toLowerCase() === sponsorKeyHash.toLowerCase()
+        );
+
+        if (!keyMatch && storedKeyHashes.length > 0) {
+          this.logger.error('⚠️ WARNING: Sponsor key not found on key page!', {
+            sponsorKeyHash,
+            storedKeyHashes
+          });
+        } else if (keyMatch) {
+          this.logger.info('✅ Sponsor key verified on key page');
+        }
+      } catch (verifyError) {
+        this.logger.warn('⚠️ Could not verify key page after ADI creation:', {
+          error: verifyError instanceof Error ? verifyError.message : String(verifyError)
+        });
+      }
 
       return {
         success: true,

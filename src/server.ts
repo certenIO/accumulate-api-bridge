@@ -2336,8 +2336,13 @@ app.post('/api/v1/onboarding/create-adi', async (req, res) => {
     // Credits are stored as creditBalance * 100 on the network
     await waitForKeyPageCredits(adiResult.keyPageUrl, creditsAmount * 100, 30, 1000);
 
+    // Additional delay to ensure network consistency after credit addition
+    console.log('⏳ Waiting for network propagation...');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
     // Step 5: Create data account
     console.log(`📄 Step 3/4: Creating data account...`);
+    console.log(`🔑 Using sponsor key hash: ${adiResult.sponsorKeyHash}`);
 
     const dataAccountResult = await retryWithDelay(
       async () => {
@@ -3719,6 +3724,240 @@ app.post('/api/v2/intents', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Multi-leg intent creation failed:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// =============================================================================
+// V2 TWO-PHASE SIGNING ENDPOINTS (for Key Vault external signing)
+// =============================================================================
+
+/**
+ * POST /api/v2/intents/prepare
+ *
+ * Phase 1 of two-phase signing for multi-leg intents.
+ * Prepares the transaction and returns hashToSign for Key Vault signing.
+ * This ensures user approval is required for ALL multi-leg transactions.
+ */
+app.post('/api/v2/intents/prepare', async (req, res) => {
+  console.log('\n🔐 POST /api/v2/intents/prepare (Multi-Leg Two-Phase Signing - Phase 1)');
+
+  try {
+    const {
+      intent_data,
+      cross_chain_data,
+      governance_data,
+      replay_data,
+      execution_mode = 'sequential',
+      proof_class = 'on_demand',
+      contract_addresses,
+      adi_url,
+      public_key,  // Required for two-phase signing
+      signer_key_page_url,
+    } = req.body;
+
+    // Validate required fields
+    if (!public_key) {
+      return res.status(400).json({
+        success: false,
+        error: 'public_key is required for two-phase signing (from Key Vault)',
+      });
+    }
+
+    if (!cross_chain_data || !cross_chain_data.legs || !Array.isArray(cross_chain_data.legs)) {
+      return res.status(400).json({
+        success: false,
+        error: 'cross_chain_data.legs is required and must be an array',
+      });
+    }
+
+    if (cross_chain_data.legs.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'At least one leg is required',
+      });
+    }
+
+    // Validate execution mode
+    const validModes = ['sequential', 'parallel', 'atomic'];
+    if (!validModes.includes(execution_mode)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid execution_mode. Must be one of: ${validModes.join(', ')}`,
+      });
+    }
+
+    // Validate proof class
+    const validProofClasses = ['on_demand', 'on_cadence'];
+    if (!validProofClasses.includes(proof_class)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid proof_class. Must be one of: ${validProofClasses.join(', ')}`,
+      });
+    }
+
+    // Generate intent ID if not provided
+    const intentId = intent_data?.intent_id || crypto.randomUUID();
+    const legCount = cross_chain_data.legs.length;
+    const adiUrl = adi_url || governance_data?.organizationAdi || '';
+
+    console.log(`  Intent ID: ${intentId}`);
+    console.log(`  Leg count: ${legCount}`);
+    console.log(`  Execution mode: ${execution_mode}`);
+    console.log(`  Proof class: ${proof_class}`);
+    console.log(`  Public key: ${public_key?.slice(0, 20)}...`);
+
+    // Convert incoming legs to IntentLeg format
+    const intentLegs: IntentLeg[] = cross_chain_data.legs.map((leg: any, index: number) => ({
+      legId: leg.legId || `leg-${index}`,
+      role: leg.role || (index === 0 ? 'source' : 'destination'),
+      chain: leg.chain || 'ethereum',
+      chainId: leg.chainId || 1,
+      fromAddress: leg.from || '',
+      toAddress: leg.to || '',
+      amount: leg.amountEth || '0',
+      amountWei: leg.amountWei,
+      tokenSymbol: leg.asset?.symbol || 'ETH',
+      tokenAddress: leg.asset?.address,
+      sequenceOrder: leg.sequence_order ?? index,
+    }));
+
+    console.log(`  Building multi-leg intent with ${intentLegs.length} legs for Key Vault signing`);
+
+    const prepareRequest: CreateMultiLegIntentRequest = {
+      intent: {
+        id: intentId,
+        legs: intentLegs,
+        adiUrl: adiUrl,
+        initiatedBy: intent_data?.created_by || 'api-bridge',
+        timestamp: Date.now(),
+        executionMode: execution_mode as ExecutionMode,
+      },
+      contractAddresses: contract_addresses || {
+        anchor: '0x8398D7EB594bCc608a0210cf206b392d35Ed5339',
+        anchorV2: '0x9B29771EFA2C6645071C589239590b81ae2C5825',
+        abstractAccount: '',
+        entryPoint: '',
+      },
+      proofClass: proof_class as 'on_demand' | 'on_cadence',
+      executionMode: execution_mode as ExecutionMode,
+    };
+
+    // Prepare the multi-leg intent for external signing
+    const result = await certenIntentService.prepareMultiLegTransactionIntent(
+      prepareRequest,
+      public_key,
+      signer_key_page_url
+    );
+
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to prepare multi-leg intent',
+      });
+    }
+
+    console.log('✅ Multi-leg intent prepared for Key Vault signing');
+
+    res.json({
+      success: true,
+      request_id: result.requestId,
+      transaction_hash: result.transactionHash,
+      hash_to_sign: result.hashToSign,  // THIS is what Key Vault should sign!
+      signer_key_page_url: result.signerKeyPageUrl,
+      key_page_version: result.keyPageVersion,
+      intent_id: intentId,
+      leg_count: legCount,
+      execution_mode,
+      proof_class,
+      data_account: result.dataAccount,
+      message: 'Multi-leg intent prepared. Sign hash_to_sign with Key Vault and call /api/v2/intents/submit-signed',
+    });
+
+  } catch (error) {
+    console.error('❌ Multi-leg intent preparation failed:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/v2/intents/submit-signed
+ *
+ * Phase 2 of two-phase signing for multi-leg intents.
+ * Accepts the signature from Key Vault and submits the transaction.
+ */
+app.post('/api/v2/intents/submit-signed', async (req, res) => {
+  console.log('\n📤 POST /api/v2/intents/submit-signed (Multi-Leg Two-Phase Signing - Phase 2)');
+
+  try {
+    const { request_id, signature, public_key, intent_id, leg_count, execution_mode, proof_class } = req.body;
+
+    console.log('  Submitting signed multi-leg intent:', {
+      request_id,
+      hasSignature: !!signature,
+      hasPublicKey: !!public_key,
+      intent_id,
+      leg_count,
+    });
+
+    // Validate required fields
+    if (!request_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'request_id is required (from /api/v2/intents/prepare)',
+      });
+    }
+
+    if (!signature) {
+      return res.status(400).json({
+        success: false,
+        error: 'signature is required (from Key Vault)',
+      });
+    }
+
+    if (!public_key) {
+      return res.status(400).json({
+        success: false,
+        error: 'public_key is required (from Key Vault)',
+      });
+    }
+
+    // Submit with external signature
+    const result = await certenIntentService.submitMultiLegWithExternalSignature(
+      request_id,
+      signature,
+      public_key
+    );
+
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to submit multi-leg intent',
+      });
+    }
+
+    console.log('✅ Multi-leg intent submitted with Key Vault signature');
+
+    res.json({
+      success: true,
+      tx_hash: result.txHash,
+      operation_id: result.roundId,
+      intent_id: intent_id,
+      leg_count: leg_count,
+      execution_mode: execution_mode,
+      proof_class: proof_class,
+      data_account: result.dataAccount,
+      message: 'Multi-leg intent submitted successfully with Key Vault signature',
+    });
+
+  } catch (error) {
+    console.error('❌ Multi-leg intent submission failed:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
