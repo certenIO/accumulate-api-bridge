@@ -824,6 +824,658 @@ export class AccumulateService {
     }
   }
 
+  // =============================================================================
+  // TWO-PHASE SIGNING FOR ACCOUNT AUTHORITY UPDATES
+  // =============================================================================
+
+  // In-memory storage for prepared authority transactions
+  private preparedAuthorityTransactions = new Map<string, {
+    transaction: any;
+    transactionHash: string;
+    hashToSign: string;
+    sigMdHash: string;
+    publicKey: string;
+    signerKeyPageUrl: string;
+    keyPageVersion: number;
+    validTimestamp: number;
+    accountUrl: string;
+    operations: any[];
+    createdAt: number;
+  }>();
+
+  /**
+   * Prepare an UpdateAccountAuth transaction without signing.
+   * Returns the transaction hash that needs to be signed by the Key Vault.
+   *
+   * This enables two-phase signing: prepare → sign via Key Vault → submit
+   */
+  async prepareAccountAuthUpdate(
+    accountUrl: string,
+    operations: any[],
+    publicKey: string,
+    signerKeyPageUrl?: string
+  ): Promise<{
+    success: boolean;
+    requestId?: string;
+    transactionHash?: string;
+    hashToSign?: string;
+    signerKeyPageUrl?: string;
+    keyPageVersion?: number;
+    operations?: any[];
+    error?: string;
+  }> {
+    try {
+      this.logger.info('🔐 Preparing AccountAuth update transaction (two-phase signing)', {
+        accountUrl,
+        operationsCount: operations.length,
+        hasPublicKey: !!publicKey
+      });
+
+      // Validate public key is provided
+      if (!publicKey) {
+        throw new Error('publicKey is required for two-phase signing (from Key Vault)');
+      }
+
+      // Validate operations
+      if (!operations || operations.length === 0) {
+        throw new Error('No operations provided for AccountAuth update');
+      }
+
+      // Transform operations to SDK format
+      const sdkOperations = operations.map(op => {
+        const operation: any = {};
+
+        switch (op.type.toLowerCase()) {
+          case 'enable':
+            operation.type = 'enable';
+            if (op.authority) {
+              operation.authority = op.authority;
+            }
+            break;
+          case 'disable':
+            operation.type = 'disable';
+            if (op.authority) {
+              operation.authority = op.authority;
+            }
+            break;
+          case 'addauthority':
+            operation.type = 'addAuthority';
+            operation.authority = op.authority || op.authorityData?.keyBookUrl;
+            if (!operation.authority) {
+              throw new Error('AddAuthority operation requires authority URL');
+            }
+            break;
+          case 'removeauthority':
+            operation.type = 'removeAuthority';
+            operation.authority = op.authority || op.authorityData?.keyBookUrl;
+            if (!operation.authority) {
+              throw new Error('RemoveAuthority operation requires authority URL');
+            }
+            break;
+          default:
+            throw new Error(`Unsupported operation type: ${op.type}`);
+        }
+
+        return operation;
+      });
+
+      this.logger.info('🔧 Transformed operations to SDK format', { sdkOperations });
+
+      // Determine signer keypage URL - use provided or derive from account
+      let keypageUrl = signerKeyPageUrl;
+      if (!keypageUrl) {
+        const accountParts = accountUrl.split('/');
+        if (accountParts.length >= 3) {
+          const adiUrl = accountParts.slice(0, 3).join('/');
+          keypageUrl = `${adiUrl}/book/1`;
+        } else {
+          throw new Error('Cannot derive signer keypage URL from account URL');
+        }
+      }
+
+      this.logger.info('🔑 Using signer keypage', { keypageUrl });
+
+      // Get FRESH key page version and lastUsedOn timestamp
+      const keyPageInfo = await this.getCurrentKeyPageInfo(keypageUrl);
+
+      // Calculate valid timestamp
+      const lastUsedMicros = keyPageInfo.lastUsedOn || 0;
+      const rightNowMicros = Date.now() * 1000;
+      const validMicros = Math.max(lastUsedMicros + 2000000, rightNowMicros + 1000000);
+
+      // Compute signature metadata hash from public key
+      const publicKeyBytes = Buffer.from(publicKey.replace(/^0x/, ''), 'hex');
+
+      // Build the signature metadata object
+      const signatureObject = new core.ED25519Signature({
+        type: 'ed25519',
+        publicKey: publicKeyBytes,
+        signer: keypageUrl,
+        signerVersion: keyPageInfo.version,
+        timestamp: validMicros,
+      });
+
+      // Compute sigMdHash = sha256(encode(signatureObject))
+      const encodedSig = encode(signatureObject);
+      const sigMdHash = sha256(encodedSig);
+
+      this.logger.info('🔐 Computed signature metadata hash', {
+        sigMdHashHex: Buffer.from(sigMdHash).toString('hex').substring(0, 16) + '...',
+        publicKeyHex: publicKey.substring(0, 16) + '...',
+        signer: keypageUrl,
+        timestamp: validMicros
+      });
+
+      // Create the UpdateAccountAuth transaction with initiator set
+      const transaction = new Transaction({
+        header: {
+          principal: accountUrl,
+          initiator: sigMdHash,
+        },
+        body: {
+          type: 'updateAccountAuth',
+          operations: sdkOperations,
+        },
+      });
+
+      // Calculate transaction hash
+      const transactionHash = transaction.hash();
+      const transactionHashHex = Buffer.from(transactionHash).toString('hex');
+
+      // Compute the actual hash to sign: sha256(sigMdHash + transactionHash)
+      const hashToSign = sha256(Buffer.concat([Buffer.from(sigMdHash), Buffer.from(transactionHash)]));
+      const hashToSignHex = Buffer.from(hashToSign).toString('hex');
+
+      this.logger.info('🔑 Computed hash to sign for AccountAuth', {
+        transactionHashHex: transactionHashHex.substring(0, 16) + '...',
+        hashToSignHex: hashToSignHex.substring(0, 16) + '...'
+      });
+
+      // Generate a unique request ID
+      const requestId = `auth_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Store prepared transaction for later submission
+      this.preparedAuthorityTransactions.set(requestId, {
+        transaction,
+        transactionHash: transactionHashHex,
+        hashToSign: hashToSignHex,
+        sigMdHash: Buffer.from(sigMdHash).toString('hex'),
+        publicKey: publicKey,
+        signerKeyPageUrl: keypageUrl,
+        keyPageVersion: keyPageInfo.version,
+        validTimestamp: validMicros,
+        accountUrl,
+        operations: sdkOperations,
+        createdAt: Date.now()
+      });
+
+      // Clean up old prepared transactions
+      this.cleanupPreparedAuthorityTransactions();
+
+      this.logger.info('✅ AccountAuth transaction prepared for Key Vault signing', {
+        requestId,
+        transactionHash: transactionHashHex,
+        hashToSign: hashToSignHex,
+        signerKeyPageUrl: keypageUrl,
+        keyPageVersion: keyPageInfo.version,
+        operationsCount: sdkOperations.length
+      });
+
+      return {
+        success: true,
+        requestId,
+        transactionHash: transactionHashHex,
+        hashToSign: hashToSignHex,
+        signerKeyPageUrl: keypageUrl,
+        keyPageVersion: keyPageInfo.version,
+        operations: sdkOperations
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to prepare AccountAuth transaction:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Submit a prepared AccountAuth transaction with an external signature from Key Vault.
+   */
+  async submitAccountAuthWithExternalSignature(
+    requestId: string,
+    signature: string,
+    publicKey: string
+  ): Promise<{
+    success: boolean;
+    txId?: string;
+    txHash?: string;
+    accountUrl?: string;
+    operations?: any[];
+    error?: string;
+  }> {
+    try {
+      this.logger.info('📤 Submitting AccountAuth with Key Vault signature', {
+        requestId,
+        signatureLength: signature.length,
+        publicKeyLength: publicKey.length
+      });
+
+      // Retrieve prepared transaction
+      const prepared = this.preparedAuthorityTransactions.get(requestId);
+      if (!prepared) {
+        return {
+          success: false,
+          error: 'Prepared transaction not found or expired. Please prepare again.'
+        };
+      }
+
+      // Remove from storage
+      this.preparedAuthorityTransactions.delete(requestId);
+
+      // Convert signature from hex to bytes
+      const signatureBytes = Buffer.from(signature.replace(/^0x/, ''), 'hex');
+
+      // Use the CACHED public key from prepare
+      const cachedPublicKey = prepared.publicKey;
+      const publicKeyBytes = Buffer.from(cachedPublicKey.replace(/^0x/, ''), 'hex');
+
+      // Verify the public key matches
+      if (publicKey.replace(/^0x/, '').toLowerCase() !== cachedPublicKey.replace(/^0x/, '').toLowerCase()) {
+        this.logger.warn('⚠️ Public key mismatch!', {
+          provided: publicKey.substring(0, 16) + '...',
+          cached: cachedPublicKey.substring(0, 16) + '...'
+        });
+      }
+
+      // Construct signature object
+      const sigObject = {
+        type: 'ed25519',
+        signature: signatureBytes,
+        publicKey: publicKeyBytes,
+        signer: prepared.signerKeyPageUrl,
+        signerVersion: prepared.keyPageVersion,
+        timestamp: prepared.validTimestamp
+      };
+
+      this.logger.info('🔐 Constructed signature object for AccountAuth', {
+        signer: sigObject.signer,
+        signerVersion: sigObject.signerVersion,
+        timestamp: sigObject.timestamp
+      });
+
+      // Submit transaction with external signature
+      const submitPayload = {
+        transaction: [prepared.transaction],
+        signatures: [sigObject]
+      };
+
+      const submitResult = await this.client.submit(submitPayload);
+
+      // Process results
+      let txId = null;
+
+      for (const r of submitResult) {
+        if (!r.success) {
+          this.logger.error('❌ AccountAuth submission failed:', r);
+          throw new Error(`Submission failed: ${r.message || 'Unknown error'}`);
+        }
+        if (r.status?.txID) {
+          txId = r.status.txID.toString();
+        }
+      }
+
+      this.logger.info('✅ AccountAuth submitted successfully with Key Vault signature', {
+        txId,
+        accountUrl: prepared.accountUrl,
+        operationsCount: prepared.operations.length
+      });
+
+      return {
+        success: true,
+        txId,
+        txHash: txId,
+        accountUrl: prepared.accountUrl,
+        operations: prepared.operations
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to submit AccountAuth with external signature:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Clean up prepared authority transactions older than 10 minutes
+   */
+  private cleanupPreparedAuthorityTransactions(): void {
+    const maxAge = 10 * 60 * 1000; // 10 minutes
+    const now = Date.now();
+
+    for (const [requestId, prepared] of this.preparedAuthorityTransactions) {
+      if (now - prepared.createdAt > maxAge) {
+        this.logger.info('🧹 Cleaning up expired authority transaction', { requestId });
+        this.preparedAuthorityTransactions.delete(requestId);
+      }
+    }
+  }
+
+  // =============================================================================
+  // TWO-PHASE SIGNING FOR KEYPAGE UPDATES
+  // =============================================================================
+
+  // In-memory storage for prepared KeyPage update transactions
+  private preparedKeyPageTransactions = new Map<string, {
+    transaction: any;
+    transactionHash: string;
+    hashToSign: string;
+    sigMdHash: string;
+    publicKey: string;
+    signerKeyPageUrl: string;
+    keyPageVersion: number;
+    validTimestamp: number;
+    keyPageUrl: string;
+    operations: any[];
+    createdAt: number;
+  }>();
+
+  /**
+   * Prepare a KeyPage update transaction for external signing (two-phase signing).
+   * Returns the hash that needs to be signed by the Key Vault.
+   *
+   * This enables two-phase signing: prepare → sign via Key Vault → submit
+   */
+  async prepareKeyPageUpdate(
+    keyPageUrl: string,
+    operations: any[],
+    publicKey: string,
+    signerKeyPageUrl?: string
+  ): Promise<{
+    success: boolean;
+    requestId?: string;
+    transactionHash?: string;
+    hashToSign?: string;
+    signerKeyPageUrl?: string;
+    keyPageVersion?: number;
+    keyPageUrl?: string;
+    operations?: any[];
+    error?: string;
+  }> {
+    try {
+      this.logger.info('🔐 Preparing KeyPage update transaction (two-phase signing)', {
+        keyPageUrl,
+        operationsCount: operations.length,
+        hasPublicKey: !!publicKey
+      });
+
+      // Validate public key is provided
+      if (!publicKey) {
+        throw new Error('publicKey is required for two-phase signing (from Key Vault)');
+      }
+
+      // Validate operations
+      if (!operations || operations.length === 0) {
+        throw new Error('No operations provided for KeyPage update');
+      }
+
+      // Transform operations to SDK format
+      // API receives: { type: 'add', delegate: 'acc://...' } or { type: 'add', keyHash: '...' }
+      // SDK expects: { type: 'add', entry: { delegate: 'acc://...' } } or { type: 'add', entry: { keyHash: '...' } }
+      const transformedOperations = operations.map(op => {
+        if (op.delegate || op.keyHash) {
+          return {
+            type: op.type,
+            entry: {
+              ...(op.delegate && { delegate: op.delegate }),
+              ...(op.keyHash && { keyHash: op.keyHash })
+            }
+          };
+        }
+        // For operations like setThreshold, pass through as-is
+        return op;
+      });
+
+      this.logger.info('🔧 Transformed operations to SDK format', { transformedOperations });
+
+      // Use the same keypage as signer if not specified
+      const signerUrl = signerKeyPageUrl || keyPageUrl;
+
+      this.logger.info('🔑 Using signer keypage', { signerUrl });
+
+      // Get FRESH key page version and lastUsedOn timestamp
+      const keyPageInfo = await this.getCurrentKeyPageInfo(signerUrl);
+
+      // Calculate valid timestamp
+      const lastUsedMicros = keyPageInfo.lastUsedOn || 0;
+      const rightNowMicros = Date.now() * 1000;
+      const validMicros = Math.max(lastUsedMicros + 2000000, rightNowMicros + 1000000);
+
+      // Compute signature metadata hash from public key
+      const publicKeyBytes = Buffer.from(publicKey.replace(/^0x/, ''), 'hex');
+
+      // Build the signature metadata object
+      const signatureObject = new core.ED25519Signature({
+        type: 'ed25519',
+        publicKey: publicKeyBytes,
+        signer: signerUrl,
+        signerVersion: keyPageInfo.version,
+        timestamp: validMicros,
+      });
+
+      // Compute sigMdHash = sha256(encode(signatureObject))
+      const encodedSig = encode(signatureObject);
+      const sigMdHash = sha256(encodedSig);
+
+      this.logger.info('🔐 Computed signature metadata hash', {
+        sigMdHashHex: Buffer.from(sigMdHash).toString('hex').substring(0, 16) + '...',
+        publicKeyHex: publicKey.substring(0, 16) + '...',
+        signer: signerUrl,
+        timestamp: validMicros
+      });
+
+      // Create the updateKeyPage transaction with initiator set
+      const transaction = new Transaction({
+        header: {
+          principal: keyPageUrl,
+          initiator: sigMdHash,
+        },
+        body: {
+          type: 'updateKeyPage',
+          operation: transformedOperations,
+        },
+      });
+
+      // Calculate transaction hash
+      const transactionHash = transaction.hash();
+      const transactionHashHex = Buffer.from(transactionHash).toString('hex');
+
+      // Compute the actual hash to sign: sha256(sigMdHash + transactionHash)
+      const hashToSign = sha256(Buffer.concat([Buffer.from(sigMdHash), Buffer.from(transactionHash)]));
+      const hashToSignHex = Buffer.from(hashToSign).toString('hex');
+
+      this.logger.info('🔑 Computed hash to sign for KeyPage update', {
+        transactionHashHex: transactionHashHex.substring(0, 16) + '...',
+        hashToSignHex: hashToSignHex.substring(0, 16) + '...'
+      });
+
+      // Generate a unique request ID
+      const requestId = `keypage_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Store prepared transaction for later submission
+      this.preparedKeyPageTransactions.set(requestId, {
+        transaction,
+        transactionHash: transactionHashHex,
+        hashToSign: hashToSignHex,
+        sigMdHash: Buffer.from(sigMdHash).toString('hex'),
+        publicKey: publicKey,
+        signerKeyPageUrl: signerUrl,
+        keyPageVersion: keyPageInfo.version,
+        validTimestamp: validMicros,
+        keyPageUrl,
+        operations: transformedOperations,
+        createdAt: Date.now()
+      });
+
+      // Clean up old prepared transactions
+      this.cleanupPreparedKeyPageTransactions();
+
+      this.logger.info('✅ KeyPage update transaction prepared for Key Vault signing', {
+        requestId,
+        transactionHash: transactionHashHex,
+        hashToSign: hashToSignHex,
+        signerKeyPageUrl: signerUrl,
+        keyPageVersion: keyPageInfo.version,
+        operationsCount: transformedOperations.length
+      });
+
+      return {
+        success: true,
+        requestId,
+        transactionHash: transactionHashHex,
+        hashToSign: hashToSignHex,
+        signerKeyPageUrl: signerUrl,
+        keyPageVersion: keyPageInfo.version,
+        keyPageUrl,
+        operations: transformedOperations
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to prepare KeyPage update transaction:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Submit a prepared KeyPage update transaction with an external signature from Key Vault.
+   */
+  async submitKeyPageWithExternalSignature(
+    requestId: string,
+    signature: string,
+    publicKey: string
+  ): Promise<{
+    success: boolean;
+    txId?: string;
+    txHash?: string;
+    keyPageUrl?: string;
+    operations?: any[];
+    error?: string;
+  }> {
+    try {
+      this.logger.info('📤 Submitting KeyPage update with Key Vault signature', {
+        requestId,
+        signatureLength: signature.length,
+        publicKeyLength: publicKey.length
+      });
+
+      // Retrieve prepared transaction
+      const prepared = this.preparedKeyPageTransactions.get(requestId);
+      if (!prepared) {
+        return {
+          success: false,
+          error: 'Prepared transaction not found or expired. Please prepare again.'
+        };
+      }
+
+      // Remove from storage
+      this.preparedKeyPageTransactions.delete(requestId);
+
+      // Convert signature from hex to bytes
+      const signatureBytes = Buffer.from(signature.replace(/^0x/, ''), 'hex');
+
+      // Use the CACHED public key from prepare
+      const cachedPublicKey = prepared.publicKey;
+      const publicKeyBytes = Buffer.from(cachedPublicKey.replace(/^0x/, ''), 'hex');
+
+      // Verify the public key matches
+      if (publicKey.replace(/^0x/, '').toLowerCase() !== cachedPublicKey.replace(/^0x/, '').toLowerCase()) {
+        this.logger.warn('⚠️ Public key mismatch!', {
+          provided: publicKey.substring(0, 16) + '...',
+          cached: cachedPublicKey.substring(0, 16) + '...'
+        });
+      }
+
+      // Construct signature object
+      const sigObject = {
+        type: 'ed25519',
+        signature: signatureBytes,
+        publicKey: publicKeyBytes,
+        signer: prepared.signerKeyPageUrl,
+        signerVersion: prepared.keyPageVersion,
+        timestamp: prepared.validTimestamp
+      };
+
+      this.logger.info('🔐 Constructed signature object for KeyPage update', {
+        signer: sigObject.signer,
+        signerVersion: sigObject.signerVersion,
+        timestamp: sigObject.timestamp
+      });
+
+      // Submit transaction with external signature
+      const submitPayload = {
+        transaction: [prepared.transaction],
+        signatures: [sigObject]
+      };
+
+      const submitResult = await this.client.submit(submitPayload);
+
+      // Process results
+      let txId = null;
+
+      for (const r of submitResult) {
+        if (!r.success) {
+          this.logger.error('❌ KeyPage update submission failed:', r);
+          throw new Error(`Submission failed: ${r.message || 'Unknown error'}`);
+        }
+        if (r.status?.txID) {
+          txId = r.status.txID.toString();
+        }
+      }
+
+      this.logger.info('✅ KeyPage update submitted successfully with Key Vault signature', {
+        txId,
+        keyPageUrl: prepared.keyPageUrl,
+        operationsCount: prepared.operations.length
+      });
+
+      return {
+        success: true,
+        txId,
+        txHash: txId,
+        keyPageUrl: prepared.keyPageUrl,
+        operations: prepared.operations
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to submit KeyPage update with external signature:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Clean up prepared KeyPage transactions older than 10 minutes
+   */
+  private cleanupPreparedKeyPageTransactions(): void {
+    const maxAge = 10 * 60 * 1000; // 10 minutes
+    const now = Date.now();
+
+    for (const [requestId, prepared] of this.preparedKeyPageTransactions) {
+      if (now - prepared.createdAt > maxAge) {
+        this.logger.info('🧹 Cleaning up expired KeyPage transaction', { requestId });
+        this.preparedKeyPageTransactions.delete(requestId);
+      }
+    }
+  }
+
   async getNetworkStatus(): Promise<any> {
     try {
       const networkStatus = await this.client.networkStatus();

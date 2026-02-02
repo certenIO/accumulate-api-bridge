@@ -720,8 +720,180 @@ app.post('/api/v1/keypage/create', async (req, res) => {
   }
 });
 
+// =============================================================================
+// ACCOUNT AUTHORITIES TWO-PHASE SIGNING ENDPOINTS
+// =============================================================================
+
+/**
+ * POST /api/v1/account/authorities/prepare
+ *
+ * Phase 1 of two-phase signing for account authority updates.
+ * Prepares the transaction and returns hash_to_sign for Key Vault signing.
+ * This ensures user approval is required for ALL authority modifications.
+ */
+app.post('/api/v1/account/authorities/prepare', async (req, res) => {
+  console.log('\n🔐 POST /api/v1/account/authorities/prepare (Two-Phase Signing - Phase 1)');
+
+  try {
+    const { accountUrl, operations, publicKey, signerKeypageUrl } = req.body;
+
+    // Validate required fields
+    if (!publicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'public_key is required for two-phase signing (from Key Vault)'
+      });
+    }
+
+    if (!accountUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'Account URL is required'
+      });
+    }
+
+    if (!operations || !Array.isArray(operations) || operations.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Operations array is required and must contain at least one operation'
+      });
+    }
+
+    // Validate each operation
+    for (const operation of operations) {
+      if (!operation.type || !['addAuthority', 'removeAuthority', 'enable', 'disable'].includes(operation.type)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Each operation must have a valid type: addAuthority, removeAuthority, enable, or disable'
+        });
+      }
+      if (!operation.authority && operation.type !== 'enable' && operation.type !== 'disable') {
+        return res.status(400).json({
+          success: false,
+          error: 'AddAuthority and RemoveAuthority operations must have an authority URL'
+        });
+      }
+    }
+
+    console.log(`  Account: ${accountUrl}`);
+    console.log(`  Operations: ${operations.length}`);
+    console.log(`  Public key: ${publicKey?.slice(0, 20)}...`);
+
+    const result = await accumulateService.prepareAccountAuthUpdate(
+      accountUrl,
+      operations,
+      publicKey,
+      signerKeypageUrl
+    );
+
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to prepare authority update'
+      });
+    }
+
+    console.log('✅ Authority update prepared for Key Vault signing');
+
+    res.json({
+      success: true,
+      request_id: result.requestId,
+      transaction_hash: result.transactionHash,
+      hash_to_sign: result.hashToSign,  // THIS is what Key Vault should sign!
+      signer_key_page_url: result.signerKeyPageUrl,
+      key_page_version: result.keyPageVersion,
+      operations: result.operations,
+      message: 'Authority update prepared. Sign hash_to_sign with Key Vault and call /api/v1/account/authorities/submit-signed'
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to prepare authority update:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * POST /api/v1/account/authorities/submit-signed
+ *
+ * Phase 2 of two-phase signing for account authority updates.
+ * Accepts the signature from Key Vault and submits the transaction.
+ */
+app.post('/api/v1/account/authorities/submit-signed', async (req, res) => {
+  console.log('\n📤 POST /api/v1/account/authorities/submit-signed (Two-Phase Signing - Phase 2)');
+
+  try {
+    const { request_id, signature, public_key } = req.body;
+
+    console.log('  Submitting signed authority update:', {
+      request_id,
+      hasSignature: !!signature,
+      hasPublicKey: !!public_key
+    });
+
+    // Validate required fields
+    if (!request_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'request_id is required (from /api/v1/account/authorities/prepare)'
+      });
+    }
+
+    if (!signature) {
+      return res.status(400).json({
+        success: false,
+        error: 'signature is required (from Key Vault)'
+      });
+    }
+
+    if (!public_key) {
+      return res.status(400).json({
+        success: false,
+        error: 'public_key is required (from Key Vault)'
+      });
+    }
+
+    const result = await accumulateService.submitAccountAuthWithExternalSignature(
+      request_id,
+      signature,
+      public_key
+    );
+
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to submit authority update'
+      });
+    }
+
+    console.log('✅ Authority update submitted with Key Vault signature');
+
+    res.json({
+      success: true,
+      txId: result.txId,
+      tx_hash: result.txHash,
+      account_url: result.accountUrl,
+      operations: result.operations,
+      message: 'Authority update submitted successfully with Key Vault signature'
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to submit authority update:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Legacy endpoint (DEPRECATED - use two-phase signing endpoints instead)
 // Update account authorities endpoint (real implementation)
 app.post('/api/v1/account/authorities/update', async (req, res) => {
+  console.log('\n⚠️ WARNING: /api/v1/account/authorities/update is DEPRECATED');
+  console.log('  Use /api/v1/account/authorities/prepare + /submit-signed for Key Vault signing');
+
   try {
     const { accountUrl, operations, signerKeypageUrl } = req.body;
 
@@ -1770,6 +1942,151 @@ app.post('/api/v1/keypage/update', async (req, res) => {
     });
   }
 });
+
+// =============================================================================
+// TWO-PHASE SIGNING FOR KEYPAGE UPDATES (Key Vault integration)
+// =============================================================================
+
+/**
+ * Prepare a KeyPage update transaction for Key Vault signing.
+ * Phase 1: Returns the hash that needs to be signed by the Key Vault.
+ */
+app.post('/api/v1/keypage/update/prepare', async (req, res) => {
+  try {
+    const { keyPageUrl, operations, publicKey, signerKeypageUrl } = req.body;
+
+    if (!keyPageUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'KeyPage URL is required'
+      });
+    }
+
+    if (!publicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Public key is required for Key Vault signing'
+      });
+    }
+
+    if (!operations || !Array.isArray(operations) || operations.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Operations array is required and must contain at least one operation'
+      });
+    }
+
+    // Validate each operation
+    const validOperationTypes = ['add', 'remove', 'update', 'setThreshold', 'updateAllowed', 'setRejectThreshold', 'setResponseThreshold'];
+    for (const operation of operations) {
+      if (!operation.type || !validOperationTypes.includes(operation.type)) {
+        return res.status(400).json({
+          success: false,
+          error: `Each operation must have a valid type: ${validOperationTypes.join(', ')}`
+        });
+      }
+    }
+
+    console.log(`🔐 Preparing KeyPage update for Key Vault signing: ${keyPageUrl}`);
+    console.log(`📝 Operations: ${operations.map((op: any) => op.type).join(', ')}`);
+
+    const result = await accumulateService.prepareKeyPageUpdate(
+      keyPageUrl,
+      operations,
+      publicKey,
+      signerKeypageUrl
+    );
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    res.json({
+      success: true,
+      request_id: result.requestId,
+      transaction_hash: result.transactionHash,
+      hash_to_sign: result.hashToSign,
+      signer_key_page_url: result.signerKeyPageUrl,
+      key_page_version: result.keyPageVersion,
+      key_page_url: result.keyPageUrl,
+      operations: result.operations
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to prepare KeyPage update:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * Submit a prepared KeyPage update with a signature from Key Vault.
+ * Phase 2: Submits the transaction with the external signature.
+ */
+app.post('/api/v1/keypage/update/submit-signed', async (req, res) => {
+  try {
+    const { requestId, signature, publicKey } = req.body;
+
+    if (!requestId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Request ID is required'
+      });
+    }
+
+    if (!signature) {
+      return res.status(400).json({
+        success: false,
+        error: 'Signature is required'
+      });
+    }
+
+    if (!publicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Public key is required'
+      });
+    }
+
+    console.log(`📤 Submitting signed KeyPage update: ${requestId}`);
+
+    const result = await accumulateService.submitKeyPageWithExternalSignature(
+      requestId,
+      signature,
+      publicKey
+    );
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    res.json({
+      success: true,
+      tx_id: result.txId,
+      tx_hash: result.txHash,
+      key_page_url: result.keyPageUrl,
+      operations: result.operations
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to submit signed KeyPage update:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Mark old endpoint as DEPRECATED (kept for backward compatibility)
+// Clients should migrate to /api/v1/keypage/update/prepare + /api/v1/keypage/update/submit-signed
 
 // Get ADI governance structure
 app.get('/api/v1/adi/:url/governance', async (req, res) => {
