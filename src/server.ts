@@ -3328,7 +3328,7 @@ const SEPOLIA_CONFIG = {
 
 const ARBITRUM_SEPOLIA_CONFIG = {
   rpcUrl: process.env.EVM_ARBITRUM_SEPOLIA_RPC_URL || 'https://arbitrum-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_ARBITRUM_SEPOLIA_ACCOUNT_FACTORY || '0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d',
+  factoryAddress: process.env.EVM_ARBITRUM_SEPOLIA_ACCOUNT_FACTORY || '0x842271e696EFC9EC05161FAfBB611ccFC37F5cfa',  // V4 Factory (2026-02-04)
   explorerUrl: 'https://sepolia.arbiscan.io',
   name: 'Arbitrum Sepolia'
 };
@@ -3349,7 +3349,7 @@ const BSC_TESTNET_CONFIG = {
 
 const OPTIMISM_SEPOLIA_CONFIG = {
   rpcUrl: process.env.EVM_OPTIMISM_SEPOLIA_RPC_URL || 'https://optimism-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_OPTIMISM_SEPOLIA_ACCOUNT_FACTORY || '0xCc1fE1950c89A6fF1ef28cCF38bA151fF8abFD5C',
+  factoryAddress: process.env.EVM_OPTIMISM_SEPOLIA_ACCOUNT_FACTORY || '0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3',  // V4 Factory (2026-02-04)
   explorerUrl: 'https://sepolia-optimistic.etherscan.io',
   name: 'Optimism Sepolia'
 };
