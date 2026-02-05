@@ -3949,6 +3949,490 @@ app.get('/api/v1/adi/:url/pending', async (req, res) => {
   }
 });
 
+// ==================== Pending Actions Endpoints ====================
+
+/**
+ * POST /api/v1/pending/:txHash/vote
+ *
+ * Submit a vote (signature) on a pending transaction.
+ * This adds a signature to an existing pending transaction.
+ *
+ * Request body:
+ * - vote: 'approve' | 'reject' | 'abstain'
+ * - signerId: string (key page URL)
+ * - signature: string (hex-encoded signature)
+ * - publicKey: string (hex-encoded public key)
+ * - signerVersion?: number (optional key page version)
+ */
+app.post('/api/v1/pending/:txHash/vote', async (req, res) => {
+  console.log('\n📝 POST /api/v1/pending/:txHash/vote');
+
+  try {
+    const txHash = decodeURIComponent(req.params.txHash);
+    const { vote, signerId, signature, publicKey, signerVersion } = req.body;
+
+    console.log('  Transaction Hash:', txHash);
+    console.log('  Vote:', vote);
+    console.log('  Signer ID:', signerId);
+    console.log('  Has Signature:', !!signature);
+    console.log('  Has Public Key:', !!publicKey);
+
+    // Validate required fields
+    if (!vote || !['approve', 'reject', 'abstain'].includes(vote)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid vote. Must be one of: approve, reject, abstain'
+      });
+    }
+
+    if (!signerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'signerId (key page URL) is required'
+      });
+    }
+
+    if (!signature) {
+      return res.status(400).json({
+        success: false,
+        error: 'signature is required (hex-encoded from Key Vault)'
+      });
+    }
+
+    if (!publicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'publicKey is required (hex-encoded)'
+      });
+    }
+
+    // Submit the signature to the pending transaction
+    const result = await accumulateService.submitVoteOnPendingTransaction({
+      txHash,
+      vote,
+      signerId,
+      signature,
+      publicKey,
+      signerVersion: signerVersion || 1
+    });
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error || 'Failed to submit vote'
+      });
+    }
+
+    res.json({
+      success: true,
+      txHash,
+      signatureTxHash: result.signatureTxHash,
+      signatureCount: result.signatureCount,
+      message: `Successfully submitted ${vote} vote on pending transaction`
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to submit vote on pending transaction:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * GET /api/v1/pending/:txHash/authority
+ *
+ * Get authority requirements for a pending transaction.
+ * Returns the authorities, required signatures, and collected signatures.
+ */
+app.get('/api/v1/pending/:txHash/authority', async (req, res) => {
+  console.log('\n📊 GET /api/v1/pending/:txHash/authority');
+
+  try {
+    const txHash = decodeURIComponent(req.params.txHash);
+    console.log('  Transaction Hash:', txHash);
+
+    // Query the transaction to get its principal
+    const txResult = await accumulateService.getTransactionStatus(txHash);
+
+    if (!txResult || !txResult.success) {
+      return res.status(404).json({
+        success: false,
+        error: 'Transaction not found'
+      });
+    }
+
+    const principal = txResult.principal;
+    console.log('  Principal:', principal);
+
+    // Query the principal account to get its authorities
+    const accountResult = await accumulateService.getAccount(principal);
+
+    if (!accountResult || !accountResult.success) {
+      return res.status(404).json({
+        success: false,
+        error: 'Principal account not found'
+      });
+    }
+
+    // Get authority URLs from the account
+    const authorityUrls = accountResult.account?.authorities || [];
+    const authorities: Array<{
+      url: string;
+      keyBookUrl: string;
+      keyPageUrl: string;
+      threshold: number;
+      totalKeys: number;
+      signatures: Array<{ publicKeyHash: string; signedAt: string; vote: string }>;
+    }> = [];
+
+    let totalRequired = 0;
+    let totalCollected = 0;
+
+    // Query each authority to get threshold and key information
+    for (const authUrl of authorityUrls) {
+      try {
+        // Authority URL is typically a key book URL
+        const keyBookUrl = typeof authUrl === 'string' ? authUrl : authUrl.url;
+        const keyBookResult = await accumulateService.getAccount(keyBookUrl);
+
+        if (keyBookResult && keyBookResult.success && keyBookResult.account) {
+          // Get the first key page
+          const keyPageUrl = keyBookResult.account.pages?.[0] || `${keyBookUrl}/1`;
+          const keyPageResult = await accumulateService.getAccount(keyPageUrl);
+
+          if (keyPageResult && keyPageResult.success && keyPageResult.account) {
+            const threshold = keyPageResult.account.acceptThreshold || 1;
+            const totalKeys = keyPageResult.account.entries?.length || 1;
+
+            authorities.push({
+              url: keyBookUrl,
+              keyBookUrl,
+              keyPageUrl,
+              threshold,
+              totalKeys,
+              signatures: [] // Would be populated from transaction pending state
+            });
+
+            totalRequired += threshold;
+          }
+        }
+      } catch (authError) {
+        console.warn(`  Warning: Could not query authority ${authUrl}:`, authError);
+      }
+    }
+
+    // Get pending signatures from transaction status
+    if (txResult.signatures && Array.isArray(txResult.signatures)) {
+      totalCollected = txResult.signatures.length;
+    }
+
+    res.json({
+      success: true,
+      txHash,
+      principal,
+      authorities,
+      requiredSignatures: totalRequired || 1,
+      collectedSignatures: totalCollected,
+      isReady: totalCollected >= (totalRequired || 1),
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get authority requirements:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * POST /api/v1/pending/:actionId/dismiss
+ *
+ * Dismiss a pending action (mark as seen/ignored).
+ * This is handled client-side in Firestore, but this endpoint
+ * can be used for backend validation or logging.
+ */
+app.post('/api/v1/pending/:actionId/dismiss', async (req, res) => {
+  console.log('\n📝 POST /api/v1/pending/:actionId/dismiss');
+
+  try {
+    const actionId = decodeURIComponent(req.params.actionId);
+    const { reason, userId } = req.body;
+
+    console.log('  Action ID:', actionId);
+    console.log('  Reason:', reason);
+    console.log('  User ID:', userId?.substring(0, 8) + '...');
+
+    // Note: Actual dismissal is handled in Firestore on the client side
+    // This endpoint is for audit logging and potential backend validation
+
+    res.json({
+      success: true,
+      actionId,
+      dismissed: true,
+      message: 'Action dismissed successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to dismiss action:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// ==================== Relationship Endpoints ====================
+
+/**
+ * GET /api/v1/relationships
+ *
+ * Get delegation relationships for an ADI.
+ * Queries the Accumulate network to find which key pages have
+ * delegated authority to other ADIs.
+ */
+app.get('/api/v1/relationships', async (req, res) => {
+  console.log('\n📊 GET /api/v1/relationships');
+
+  try {
+    const { adiUrl } = req.query;
+
+    if (!adiUrl || typeof adiUrl !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'adiUrl query parameter is required'
+      });
+    }
+
+    const normalizedAdiUrl = adiUrl.startsWith('acc://') ? adiUrl : `acc://${adiUrl}`;
+    console.log('  ADI URL:', normalizedAdiUrl);
+
+    // Query the ADI's key book to find delegation relationships
+    const keyBookUrl = `${normalizedAdiUrl}/book`;
+    const keyBookResult = await accumulateService.getAccount(keyBookUrl);
+
+    const relationships: Array<{
+      id: string;
+      type: 'grantor' | 'grantee';
+      delegateUrl: string;
+      keyPageUrl: string;
+      permissions: string[];
+    }> = [];
+
+    if (keyBookResult && keyBookResult.success && keyBookResult.account) {
+      const pages = keyBookResult.account.pages || [];
+
+      for (const pageUrl of pages) {
+        try {
+          const pageResult = await accumulateService.getAccount(pageUrl);
+          if (pageResult && pageResult.account) {
+            // Check for delegate entries on the key page
+            const entries = pageResult.account.entries || pageResult.account.keys || [];
+            for (const entry of entries) {
+              if (entry.delegate) {
+                relationships.push({
+                  id: `${pageUrl}-${entry.delegate}`,
+                  type: 'grantor',
+                  delegateUrl: entry.delegate,
+                  keyPageUrl: pageUrl,
+                  permissions: ['sign']
+                });
+              }
+            }
+          }
+        } catch (pageError) {
+          console.warn(`  Warning: Could not query key page ${pageUrl}`);
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      adiUrl: normalizedAdiUrl,
+      relationships,
+      count: relationships.length,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get relationships:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * POST /api/v1/relationships/delegation-request
+ *
+ * Create a delegation request.
+ * Note: This endpoint logs the request for audit purposes.
+ * The actual Firestore storage is handled client-side.
+ */
+app.post('/api/v1/relationships/delegation-request', async (req, res) => {
+  console.log('\n📝 POST /api/v1/relationships/delegation-request');
+
+  try {
+    const { requester, target, authorityType, permissions, message } = req.body;
+
+    console.log('  Requester:', requester?.adiUrl);
+    console.log('  Target:', target?.adiUrl);
+    console.log('  Authority Type:', authorityType);
+    console.log('  Permissions:', permissions);
+
+    if (!requester?.adiUrl || !target?.adiUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'requester.adiUrl and target.adiUrl are required'
+      });
+    }
+
+    // Validate that both ADIs exist on the network
+    const [requesterResult, targetResult] = await Promise.all([
+      accumulateService.getAccount(requester.adiUrl),
+      accumulateService.getAccount(target.adiUrl)
+    ]);
+
+    if (!requesterResult?.success) {
+      return res.status(404).json({
+        success: false,
+        error: `Requester ADI not found: ${requester.adiUrl}`
+      });
+    }
+
+    if (!targetResult?.success) {
+      return res.status(404).json({
+        success: false,
+        error: `Target ADI not found: ${target.adiUrl}`
+      });
+    }
+
+    const requestId = `dreq-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
+    res.json({
+      success: true,
+      requestId,
+      requester: requester.adiUrl,
+      target: target.adiUrl,
+      authorityType: authorityType || 'delegate',
+      permissions: permissions || [],
+      message: 'Delegation request created. Store in Firestore for persistence.',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to create delegation request:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * POST /api/v1/relationships/:requestId/respond
+ *
+ * Respond to a delegation request (accept or reject).
+ * If accepted, can optionally add the delegate to the key page on Accumulate.
+ */
+app.post('/api/v1/relationships/:requestId/respond', async (req, res) => {
+  console.log('\n📝 POST /api/v1/relationships/:requestId/respond');
+
+  try {
+    const requestId = decodeURIComponent(req.params.requestId);
+    const { accept, grantorAdiUrl, granteePublicKey, keyPageUrl, signature, publicKey } = req.body;
+
+    console.log('  Request ID:', requestId);
+    console.log('  Accept:', accept);
+    console.log('  Grantor ADI:', grantorAdiUrl);
+    console.log('  Key Page:', keyPageUrl);
+
+    if (accept === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'accept (boolean) is required'
+      });
+    }
+
+    // If accepted and we have the necessary info, we could add the delegate
+    // to the key page. This requires a signed transaction from the grantor.
+    // For now, we just acknowledge the response and let the client handle Firestore.
+
+    if (accept && granteePublicKey && keyPageUrl && signature) {
+      console.log('  Note: On-chain delegation would be processed here');
+      // In a full implementation, we would:
+      // 1. Prepare an UpdateKeyPage transaction to add the delegate
+      // 2. Submit it with the provided signature
+    }
+
+    res.json({
+      success: true,
+      requestId,
+      accepted: accept,
+      message: accept
+        ? 'Delegation request accepted. Update Firestore to create relationship.'
+        : 'Delegation request rejected.',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to respond to delegation request:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * DELETE /api/v1/relationships/:relationshipId
+ *
+ * Revoke a delegation relationship.
+ * Note: This logs the revocation. Actual key page updates require
+ * a signed transaction from the grantor.
+ */
+app.delete('/api/v1/relationships/:relationshipId', async (req, res) => {
+  console.log('\n🗑️ DELETE /api/v1/relationships/:relationshipId');
+
+  try {
+    const relationshipId = decodeURIComponent(req.params.relationshipId);
+    const { keyPageUrl, delegatePublicKey, signature, publicKey } = req.body;
+
+    console.log('  Relationship ID:', relationshipId);
+    console.log('  Key Page:', keyPageUrl);
+
+    // If we have the necessary info, we could remove the delegate
+    // from the key page. This requires a signed transaction.
+    // For now, we just acknowledge and let the client update Firestore.
+
+    if (keyPageUrl && delegatePublicKey && signature) {
+      console.log('  Note: On-chain delegation removal would be processed here');
+      // In a full implementation, we would:
+      // 1. Prepare an UpdateKeyPage transaction to remove the delegate
+      // 2. Submit it with the provided signature
+    }
+
+    res.json({
+      success: true,
+      relationshipId,
+      revoked: true,
+      message: 'Delegation revoked. Update Firestore to reflect status.',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to revoke delegation:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 /**
  * GET /api/v1/adi/:url/intents
  *
