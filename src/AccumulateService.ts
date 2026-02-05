@@ -4564,8 +4564,35 @@ export class AccumulateService {
         signerVersion
       });
 
+      // Normalize txHash to proper transaction URL format for querying
+      // Transaction URLs need to be: acc://txhash@signer
+      let queryUrl = txHash.trim();
+
+      // Ensure acc:// prefix
+      if (!queryUrl.toLowerCase().startsWith('acc://')) {
+        queryUrl = 'acc://' + queryUrl;
+      }
+
+      // Extract the hash part (after acc:// and before @)
+      const withoutPrefix = queryUrl.substring(6);
+      const hashPart = withoutPrefix.includes('@') ? withoutPrefix.split('@')[0] : withoutPrefix.split('/')[0];
+      const isHash = /^[a-fA-F0-9]{64}$/.test(hashPart);
+
+      // If it's a bare hash without @signer, we need the signer to query
+      // Use the signerId (key page URL) to construct the transaction URL
+      if (isHash && !queryUrl.includes('@')) {
+        // signerId should be a key page URL like acc://adi.acme/book/1
+        // Extract just the path part for the transaction URL
+        let signerPath = signerId;
+        if (signerPath.toLowerCase().startsWith('acc://')) {
+          signerPath = signerPath.substring(6);
+        }
+        queryUrl = `acc://${hashPart}@${signerPath}`;
+        this.logger.info('🔧 Normalized transaction URL', { original: txHash, normalized: queryUrl });
+      }
+
       // Query the pending transaction first to get its details
-      const txResult = await this.client.query(txHash);
+      const txResult = await this.client.query(queryUrl);
 
       if (!txResult) {
         return {
@@ -4589,6 +4616,7 @@ export class AccumulateService {
 
       // Build the signature object for submission
       // In Accumulate, we submit a signature referencing the transaction hash
+      // Use the pure 64-char hex hash (hashPart), not the full URL
       const sigObject = {
         type: 'ed25519',
         signature: signatureBytes,
@@ -4596,7 +4624,7 @@ export class AccumulateService {
         signer: signerId,
         signerVersion: signerVersion,
         timestamp: timestamp,
-        transactionHash: Buffer.from(txHash.replace(/^0x/, ''), 'hex'),
+        transactionHash: Buffer.from(hashPart.replace(/^0x/, ''), 'hex'),
         vote: vote === 'approve' ? 1 : vote === 'reject' ? 2 : 0
       };
 
@@ -4635,7 +4663,7 @@ export class AccumulateService {
 
       // Query updated transaction to get new signature count
       try {
-        const updatedTx = await this.client.query(txHash);
+        const updatedTx = await this.client.query(queryUrl);
         signatureCount = updatedTx?.signatures?.length || 0;
       } catch (queryError) {
         this.logger.warn('⚠️ Could not query updated signature count');
