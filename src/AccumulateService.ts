@@ -4209,10 +4209,23 @@ export class AccumulateService {
                 // Handle both 'operation' (singular array) and 'operations' (plural) field names
                 const operationsArray = body.operation || body.operations || [];
 
+                this.logger.info('🔍 Raw operations data', {
+                  hasOperation: !!body.operation,
+                  hasOperations: !!body.operations,
+                  operationsCount: operationsArray.length,
+                  rawOperations: operationsArray.map((op: any) => ({
+                    type: op.type,
+                    typeOf: typeof op.type,
+                    hasDelegate: !!op.entry?.delegate,
+                    hasKeyHash: !!op.entry?.keyHash
+                  }))
+                });
+
                 parsedBody = {
                   type: 'updateKeyPage',
                   operations: operationsArray.map((op: any) => {
                     const operationType = getOperationType(op);
+                    this.logger.info('🔍 Operation type resolved', { rawType: op.type, resolved: operationType });
                     return {
                       type: operationType,
                       entry: op.entry ? {
