@@ -4188,26 +4188,30 @@ export class AccumulateService {
                   const opTypeNum = typeof op.type === 'number' ? op.type : parseInt(op.type?.toString() || '0');
                   const opTypeStr = op.type?.toString()?.toLowerCase() || op.typeStr?.toLowerCase() || '';
 
-                  // Check if it's a delegate operation (has delegate field)
+                  // Check if it's a delegate operation (has delegate field in entry)
                   const isDelegate = !!(op.entry?.delegate || op.newEntry?.delegate);
 
                   // KeyPageOperationType enum values from Accumulate:
                   // 1 = Add, 2 = Remove, 3 = Update, 4 = SetThreshold
-                  if (opTypeNum === 1 || opTypeStr.includes('add')) {
+                  // Also handle string types: "add", "remove", "update", "setThreshold"
+                  if (opTypeNum === 1 || opTypeStr === 'add' || opTypeStr.includes('add')) {
                     return isDelegate ? 'addDelegate' : 'addKey';
-                  } else if (opTypeNum === 2 || opTypeStr.includes('remove')) {
+                  } else if (opTypeNum === 2 || opTypeStr === 'remove' || opTypeStr.includes('remove')) {
                     return isDelegate ? 'removeDelegate' : 'removeKey';
-                  } else if (opTypeNum === 3 || opTypeStr.includes('update')) {
+                  } else if (opTypeNum === 3 || opTypeStr === 'update' || opTypeStr.includes('update')) {
                     return isDelegate ? 'updateDelegate' : 'updateKey';
-                  } else if (opTypeNum === 4 || opTypeStr.includes('threshold')) {
+                  } else if (opTypeNum === 4 || opTypeStr === 'setthreshold' || opTypeStr.includes('threshold')) {
                     return 'updateThreshold';
                   }
                   return opTypeStr || `operation-${opTypeNum}`;
                 };
 
+                // Handle both 'operation' (singular array) and 'operations' (plural) field names
+                const operationsArray = body.operation || body.operations || [];
+
                 parsedBody = {
                   type: 'updateKeyPage',
-                  operations: body.operations?.map((op: any) => {
+                  operations: operationsArray.map((op: any) => {
                     const operationType = getOperationType(op);
                     return {
                       type: operationType,
@@ -4223,8 +4227,13 @@ export class AccumulateService {
                       } : undefined,
                       threshold: op.threshold
                     };
-                  }) || []
+                  })
                 };
+
+                this.logger.info('📝 Parsed updateKeyPage operations', {
+                  operationCount: operationsArray.length,
+                  operations: parsedBody.operations.map((o: any) => o.type)
+                });
               } else {
                 // Generic body parsing
                 parsedBody = {
