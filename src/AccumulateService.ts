@@ -3345,15 +3345,38 @@ export class AccumulateService {
                 for (const key of allKeys) {
                   let keyHash = 'unknown';
 
-                  // Handle different formats of publicKeyHash
-                  if (key?.publicKeyHash?.data && Array.isArray(key.publicKeyHash.data)) {
-                    // Convert Buffer/array to hex string
-                    keyHash = key.publicKeyHash.data.map((b: number) => b.toString(16).padStart(2, '0')).join('');
+                  // Helper to convert various buffer formats to hex
+                  const toHex = (data: any): string | null => {
+                    if (!data) return null;
+                    // Handle Buffer objects (has toString('hex'))
+                    if (Buffer.isBuffer(data)) {
+                      return data.toString('hex');
+                    }
+                    // Handle Uint8Array or typed arrays
+                    if (data instanceof Uint8Array) {
+                      return Array.from(data).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+                    }
+                    // Handle {type: 'Buffer', data: [...]} format (JSON serialized Buffer)
+                    if (data.type === 'Buffer' && Array.isArray(data.data)) {
+                      return data.data.map((b: number) => b.toString(16).padStart(2, '0')).join('');
+                    }
+                    // Handle plain array
+                    if (Array.isArray(data)) {
+                      return data.map((b: number) => b.toString(16).padStart(2, '0')).join('');
+                    }
+                    // Handle object with data property
+                    if (data.data) {
+                      return toHex(data.data);
+                    }
+                    return null;
+                  };
+
+                  // Try publicKeyHash first, then publicKey as fallback
+                  const hashHex = toHex(key?.publicKeyHash) || toHex(key?.publicKey);
+                  if (hashHex) {
+                    keyHash = hashHex;
                   } else if (typeof key?.publicKeyHash === 'string') {
                     keyHash = key.publicKeyHash;
-                  } else if (key?.publicKey?.data && Array.isArray(key.publicKey.data)) {
-                    // Fallback to publicKey if publicKeyHash not available
-                    keyHash = key.publicKey.data.map((b: number) => b.toString(16).padStart(2, '0')).join('');
                   } else if (typeof key?.publicKey === 'string') {
                     keyHash = key.publicKey;
                   }
