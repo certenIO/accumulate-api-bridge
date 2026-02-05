@@ -1389,6 +1389,21 @@ app.get('/api/v1/account/authorities', async (req, res) => {
       });
     }
 
+    // If no explicit authorities, the account inherits from ADI's main keybook
+    if (authorities.length === 0 && adiUrl) {
+      const inheritedKeyBookUrl = `${adiUrl}/book`;
+      console.log(`📋 No explicit authorities - adding inherited authority: ${inheritedKeyBookUrl}`);
+      authorities.push({
+        id: 'inherited-auth-0',
+        keyBookUrl: inheritedKeyBookUrl,
+        name: 'Inherited Authority (Main KeyBook)',
+        enabled: true,
+        existsOnNetwork: true,
+        isInherited: true,
+        disabled: false
+      });
+    }
+
     // Query pending transactions for updateAccountAuth operations
     const pendingAuthorities: Array<{
       id: string;
@@ -1400,17 +1415,34 @@ app.get('/api/v1/account/authorities', async (req, res) => {
     }> = [];
 
     try {
+      console.log(`🔍 Querying pending transactions for: ${accountUrl}`);
       const pendingResult = await accumulateService.getPendingTransactions(accountUrl as string);
+
+      console.log(`📋 Pending query result:`, {
+        success: pendingResult.success,
+        pendingCount: pendingResult.pending?.length || 0,
+        error: pendingResult.error
+      });
 
       if (pendingResult.success && pendingResult.pending) {
         for (const pendingTx of pendingResult.pending) {
+          console.log(`📝 Pending tx:`, {
+            txHash: pendingTx.txHash?.substring(0, 16),
+            txType: pendingTx.txType,
+            hasBody: !!pendingTx.body
+          });
+
           // Check if this is an updateAccountAuth transaction (type 14)
-          if (pendingTx.txType === '14' || pendingTx.txType === 'updateAccountAuth') {
+          // Handle both string and numeric types
+          const txTypeStr = String(pendingTx.txType).toLowerCase();
+          if (txTypeStr === '14' || txTypeStr === 'updateaccountauth') {
             const body = pendingTx.body;
+
+            console.log(`🔐 updateAccountAuth tx body:`, JSON.stringify(body, null, 2));
 
             if (body?.operations && Array.isArray(body.operations)) {
               for (const op of body.operations) {
-                const opType = op.type?.toLowerCase() || '';
+                const opType = String(op.type || '').toLowerCase();
                 let operationType = 'unknown';
                 let opKeyBookUrl = '';
 
@@ -1427,6 +1459,8 @@ app.get('/api/v1/account/authorities', async (req, res) => {
                   operationType = 'disable';
                   opKeyBookUrl = op.authority?.toString() || '';
                 }
+
+                console.log(`  Operation: ${opType} -> ${operationType}, authority: ${opKeyBookUrl}`);
 
                 if (opKeyBookUrl) {
                   pendingAuthorities.push({
