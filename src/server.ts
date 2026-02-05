@@ -2814,6 +2814,152 @@ app.get('/api/v1/adi/keybooks', async (req, res) => {
 });
 
 // =============================================================================
+// DATA ACCOUNT AUTHORITIES ENDPOINT
+// =============================================================================
+
+/**
+ * GET /api/v1/account/authorities
+ * Get current authorities and pending authority updates for a data account
+ */
+app.get('/api/v1/account/authorities', async (req, res) => {
+  try {
+    const { accountUrl, adiUrl } = req.query;
+
+    if (!accountUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'accountUrl is required'
+      });
+    }
+
+    console.log(`🔍 Getting authorities for account: ${accountUrl}`);
+
+    // Query the account to get its authorities
+    const accountResult = await accumulateService.getAccount(accountUrl as string);
+
+    if (!accountResult || !accountResult.success) {
+      return res.status(404).json({
+        success: false,
+        error: 'Account not found'
+      });
+    }
+
+    // Get authority URLs from the account
+    const authorityUrls = accountResult.account?.authorities || [];
+    console.log(`📋 Found ${authorityUrls.length} authorities on account`);
+
+    // Build authorities list with details
+    const authorities: Array<{
+      id: string;
+      keyBookUrl: string;
+      name: string;
+      enabled: boolean;
+      existsOnNetwork: boolean;
+      isInherited: boolean;
+      disabled?: boolean;
+    }> = [];
+
+    for (let i = 0; i < authorityUrls.length; i++) {
+      const authUrl = authorityUrls[i];
+      const keyBookUrl = typeof authUrl === 'string' ? authUrl : (authUrl.url || authUrl.toString());
+
+      // Determine if this is the inherited main keybook
+      const isMainKeyBook = adiUrl && keyBookUrl === `${adiUrl}/book`;
+
+      // Check if authority is disabled (Accumulate allows disabling individual authorities)
+      const isDisabled = typeof authUrl === 'object' && authUrl.disabled === true;
+
+      authorities.push({
+        id: `auth-${i}`,
+        keyBookUrl,
+        name: isMainKeyBook ? 'Inherited Authority (Main KeyBook)' : `Authority: ${keyBookUrl.split('/').pop()}`,
+        enabled: !isDisabled,
+        existsOnNetwork: true,
+        isInherited: isMainKeyBook || false,
+        disabled: isDisabled
+      });
+    }
+
+    // Query pending transactions for updateAccountAuth operations
+    const pendingAuthorities: Array<{
+      id: string;
+      keyBookUrl: string;
+      name: string;
+      operationType: string; // 'addAuthority' | 'removeAuthority' | 'enable' | 'disable'
+      txHash: string;
+      existsOnNetwork: boolean;
+    }> = [];
+
+    try {
+      const pendingResult = await accumulateService.getPendingTransactions(accountUrl as string);
+
+      if (pendingResult.success && pendingResult.pending) {
+        for (const pendingTx of pendingResult.pending) {
+          // Check if this is an updateAccountAuth transaction (type 14)
+          if (pendingTx.txType === '14' || pendingTx.txType === 'updateAccountAuth') {
+            const body = pendingTx.body;
+
+            if (body?.operations && Array.isArray(body.operations)) {
+              for (const op of body.operations) {
+                const opType = op.type?.toLowerCase() || '';
+                let operationType = 'unknown';
+                let keyBookUrl = '';
+
+                if (opType.includes('add')) {
+                  operationType = 'addAuthority';
+                  keyBookUrl = op.authority?.toString() || '';
+                } else if (opType.includes('remove')) {
+                  operationType = 'removeAuthority';
+                  keyBookUrl = op.authority?.toString() || '';
+                } else if (opType.includes('enable')) {
+                  operationType = 'enable';
+                  keyBookUrl = op.authority?.toString() || '';
+                } else if (opType.includes('disable')) {
+                  operationType = 'disable';
+                  keyBookUrl = op.authority?.toString() || '';
+                }
+
+                if (keyBookUrl) {
+                  pendingAuthorities.push({
+                    id: `pending-${pendingTx.txHash}-${keyBookUrl}`,
+                    keyBookUrl,
+                    name: `Pending: ${keyBookUrl.split('/').pop()}`,
+                    operationType,
+                    txHash: pendingTx.txHash,
+                    existsOnNetwork: false
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (pendingError) {
+      console.warn('⚠️ Failed to query pending transactions:', pendingError);
+      // Continue without pending - don't fail the whole request
+    }
+
+    console.log(`✅ Found ${authorities.length} authorities, ${pendingAuthorities.length} pending operations`);
+
+    res.json({
+      success: true,
+      accountUrl,
+      authorities,
+      pendingAuthorities,
+      totalAuthorities: authorities.length,
+      totalPending: pendingAuthorities.length
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get account authorities:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// =============================================================================
 // ONBOARDING ENDPOINTS - User ADI creation with sponsor funding
 // =============================================================================
 
