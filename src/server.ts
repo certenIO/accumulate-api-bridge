@@ -3913,30 +3913,59 @@ app.get('/api/v1/adi/:url/pending', async (req, res) => {
     const dataAccountUrl = `${adiUrl}/data`;
     console.log('  Checking data account:', dataAccountUrl);
 
-    // Get the data account to verify it exists
-    const accountResult = await accumulateService.getAccount(dataAccountUrl);
+    // Query pending transactions on the data account
+    const pendingResult = await accumulateService.getPendingTransactions(dataAccountUrl);
 
-    if (!accountResult || !accountResult.success) {
-      return res.json({
-        success: true,
-        adiUrl,
-        dataAccountUrl,
-        pending: [],
-        count: 0,
-        message: 'Data account not found or no pending transactions',
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    // Note: Full pending chain enumeration requires the Accumulate query API
-    // For now, return empty array - pending status is tracked in Firestore
     res.json({
       success: true,
       adiUrl,
       dataAccountUrl,
-      pending: [],
-      count: 0,
-      message: 'Pending transactions are tracked via Firestore transaction intents',
+      pending: pendingResult.pending || [],
+      count: pendingResult.pending?.length || 0,
+      timestamp: new Date().toISOString(),
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get pending transactions:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * GET /api/v1/account/:url/pending
+ *
+ * Get pending transactions for any account (key page, token account, etc.).
+ * Queries the pending chain to discover transactions awaiting signatures.
+ */
+app.get('/api/v1/account/:url/pending', async (req, res) => {
+  console.log('\n📊 GET /api/v1/account/:url/pending');
+
+  try {
+    let accountUrl = decodeURIComponent(req.params.url);
+    if (!accountUrl.startsWith('acc://')) {
+      accountUrl = `acc://${accountUrl}`;
+    }
+
+    console.log('  Querying pending transactions for:', accountUrl);
+
+    // Query pending transactions on the account
+    const pendingResult = await accumulateService.getPendingTransactions(accountUrl);
+
+    if (!pendingResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: pendingResult.error || 'Failed to query pending transactions',
+      });
+    }
+
+    res.json({
+      success: true,
+      accountUrl,
+      pending: pendingResult.pending || [],
+      count: pendingResult.pending?.length || 0,
       timestamp: new Date().toISOString(),
     });
 

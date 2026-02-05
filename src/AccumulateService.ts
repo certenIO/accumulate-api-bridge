@@ -4067,6 +4067,154 @@ export class AccumulateService {
   }
 
   /**
+   * Get pending transactions for an account (e.g., key page).
+   * This queries the pending chain to discover transactions awaiting signatures.
+   */
+  async getPendingTransactions(accountUrl: string): Promise<{
+    success: boolean;
+    pending?: Array<{
+      txHash: string;
+      txType: string;
+      principal: string;
+      initiator?: string;
+      body?: any;
+      signatures?: Array<{ signer: string; publicKeyHash: string; timestamp?: number }>;
+      signatureCount?: number;
+      requiredSignatures?: number;
+    }>;
+    error?: string;
+  }> {
+    try {
+      this.logger.info('🔍 Querying pending transactions', { accountUrl });
+
+      // Query the pending chain with expand: true to get full transaction details
+      const result = await this.client.query(accountUrl, {
+        queryType: 'pending',
+        range: { expand: true }
+      });
+
+      this.logger.info('📋 Pending chain query result', {
+        accountUrl,
+        recordCount: result?.records?.length || 0,
+        total: result?.total || 0,
+        resultKeys: Object.keys(result || {})
+      });
+
+      const pendingTxs: Array<{
+        txHash: string;
+        txType: string;
+        principal: string;
+        initiator?: string;
+        body?: any;
+        signatures?: Array<{ signer: string; publicKeyHash: string; timestamp?: number }>;
+        signatureCount?: number;
+        requiredSignatures?: number;
+      }> = [];
+
+      if (result?.records && Array.isArray(result.records)) {
+        for (const record of result.records) {
+          try {
+            // Extract transaction details from the message record
+            const message = record?.message || record?.value;
+            const transaction = message?.transaction;
+            const txHash = record?.id?.toString() || transaction?.hash?.toString() || 'unknown';
+
+            // Get transaction type from the body
+            const body = transaction?.body;
+            const txType = body?.type?.toString() || body?.typeStr || 'unknown';
+
+            // Get principal (the account being modified)
+            const principal = transaction?.header?.principal?.toString() || accountUrl;
+
+            // Get initiator if available
+            const initiator = transaction?.header?.initiator?.toString();
+
+            // Parse body for specific transaction types
+            let parsedBody: any = {};
+            if (body) {
+              // For updateKeyPage transactions, extract the operations
+              if (txType === 'updateKeyPage' || body.type === 15) {
+                parsedBody = {
+                  type: 'updateKeyPage',
+                  operations: body.operations?.map((op: any) => ({
+                    type: op.type?.toString() || op.typeStr,
+                    entry: op.entry ? {
+                      keyHash: op.entry.keyHash ? Buffer.from(op.entry.keyHash).toString('hex') : undefined,
+                      delegate: op.entry.delegate?.toString()
+                    } : undefined,
+                    oldEntry: op.oldEntry ? {
+                      keyHash: op.oldEntry.keyHash ? Buffer.from(op.oldEntry.keyHash).toString('hex') : undefined
+                    } : undefined,
+                    newEntry: op.newEntry ? {
+                      keyHash: op.newEntry.keyHash ? Buffer.from(op.newEntry.keyHash).toString('hex') : undefined
+                    } : undefined,
+                    threshold: op.threshold
+                  })) || []
+                };
+              } else {
+                // Generic body parsing
+                parsedBody = {
+                  type: txType,
+                  raw: JSON.stringify(body)
+                };
+              }
+            }
+
+            // Get signatures if available
+            const signatures: Array<{ signer: string; publicKeyHash: string; timestamp?: number }> = [];
+            if (record?.signatures && Array.isArray(record.signatures)) {
+              for (const sig of record.signatures) {
+                signatures.push({
+                  signer: sig.signer?.toString() || '',
+                  publicKeyHash: sig.publicKeyHash ? Buffer.from(sig.publicKeyHash).toString('hex') : '',
+                  timestamp: sig.timestamp
+                });
+              }
+            }
+
+            this.logger.info('📝 Found pending transaction', {
+              txHash: txHash.substring(0, 16) + '...',
+              txType,
+              principal,
+              signatureCount: signatures.length
+            });
+
+            pendingTxs.push({
+              txHash,
+              txType,
+              principal,
+              initiator,
+              body: parsedBody,
+              signatures,
+              signatureCount: signatures.length
+            });
+
+          } catch (recordError) {
+            this.logger.warn('⚠️ Failed to parse pending transaction record', {
+              error: recordError instanceof Error ? recordError.message : String(recordError)
+            });
+          }
+        }
+      }
+
+      return {
+        success: true,
+        pending: pendingTxs
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to get pending transactions', {
+        error: error instanceof Error ? error.message : String(error),
+        accountUrl
+      });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to query pending transactions'
+      };
+    }
+  }
+
+  /**
    * Submit a vote (signature) on an existing pending transaction.
    * This is used when a user approves/rejects a pending transaction
    * that requires their signature.
