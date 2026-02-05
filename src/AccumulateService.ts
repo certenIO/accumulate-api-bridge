@@ -3338,28 +3338,64 @@ export class AccumulateService {
               });
 
               if (keyPageData && keyPageData.type === 9) { // Type 9 = keyPage
-                // Extract the primary key hash (first key)
-                const primaryKey = keyPageData.keys?.[0];
-                let keyAddress = 'unknown';
-                if (primaryKey?.publicKeyHash?.data) {
-                  // Convert Buffer to hex string
-                  keyAddress = primaryKey.publicKeyHash.data.map((b: number) => b.toString(16).padStart(2, '0')).join('');
-                } else if (primaryKey?.publicKey?.data) {
-                  keyAddress = primaryKey.publicKey.data.map((b: number) => b.toString(16).padStart(2, '0')).join('');
-                } else if (typeof primaryKey?.publicKeyHash === 'string') {
-                  keyAddress = primaryKey.publicKeyHash;
-                } else if (typeof primaryKey?.publicKey === 'string') {
-                  keyAddress = primaryKey.publicKey;
+                // Extract ALL keys from the key page (not just the first one)
+                const allKeys = keyPageData.keys || [];
+                const entries: Array<{ keyHash: string; isDelegate: boolean; delegateUrl?: string; lastUsedOn?: number }> = [];
+
+                for (const key of allKeys) {
+                  let keyHash = 'unknown';
+
+                  // Handle different formats of publicKeyHash
+                  if (key?.publicKeyHash?.data && Array.isArray(key.publicKeyHash.data)) {
+                    // Convert Buffer/array to hex string
+                    keyHash = key.publicKeyHash.data.map((b: number) => b.toString(16).padStart(2, '0')).join('');
+                  } else if (typeof key?.publicKeyHash === 'string') {
+                    keyHash = key.publicKeyHash;
+                  } else if (key?.publicKey?.data && Array.isArray(key.publicKey.data)) {
+                    // Fallback to publicKey if publicKeyHash not available
+                    keyHash = key.publicKey.data.map((b: number) => b.toString(16).padStart(2, '0')).join('');
+                  } else if (typeof key?.publicKey === 'string') {
+                    keyHash = key.publicKey;
+                  }
+
+                  // Check if this is a delegate (has delegate property)
+                  const isDelegate = !!(key?.delegate);
+                  const delegateUrl = key?.delegate?.toString() || undefined;
+
+                  entries.push({
+                    keyHash,
+                    isDelegate,
+                    delegateUrl,
+                    lastUsedOn: key?.lastUsedOn
+                  });
+
+                  this.logger.info('🔑 Extracted key entry', {
+                    keyHash: keyHash.substring(0, 16) + '...',
+                    isDelegate,
+                    delegateUrl
+                  });
                 }
+
+                // Get the primary key address for backward compatibility
+                const primaryKeyAddress = entries.length > 0 ? entries[0].keyHash : 'unknown';
 
                 signers.push({
                   url: keyPageUrl,
-                  keyAddress: keyAddress,
+                  keyAddress: primaryKeyAddress, // Keep for backward compatibility
                   threshold: keyPageData.acceptThreshold || keyPageData.threshold || 1,
                   creditBalance: keyPageData.creditBalance || 0,
                   version: keyPageData.version || 1,
-                  keys: keyPageData.keys || [],
-                  type: keyPageData.keys?.length > 1 ? 'multi-signature' : 'single-signature'
+                  keys: keyPageData.keys || [], // Raw keys from blockchain
+                  entries: entries, // Parsed entries (all keys and delegates)
+                  entryCount: entries.length,
+                  type: entries.length > 1 ? 'multi-signature' : 'single-signature'
+                });
+
+                this.logger.info('✅ KeyPage processed', {
+                  keyPageUrl,
+                  entryCount: entries.length,
+                  threshold: keyPageData.acceptThreshold || keyPageData.threshold || 1,
+                  version: keyPageData.version || 1
                 });
               }
             } catch (error) {
@@ -3945,5 +3981,196 @@ export class AccumulateService {
       ltaUrl: this.lta,
       lidUrl: this.lid?.url?.toString() || ''
     };
+  }
+
+  // =============================================================================
+  // PENDING ACTIONS - VOTE SUBMISSION
+  // =============================================================================
+
+  /**
+   * Get the status of a transaction by its hash
+   * Used to query pending transactions and their signature state
+   */
+  async getTransactionStatus(txHash: string): Promise<{
+    success: boolean;
+    status?: string;
+    principal?: string;
+    txId?: string;
+    signatures?: Array<{ signer: string; publicKeyHash: string }>;
+    error?: string;
+  }> {
+    try {
+      this.logger.info('🔍 Querying transaction status', { txHash });
+
+      // Query the transaction by hash
+      const result = await this.client.query(txHash);
+
+      if (!result) {
+        return {
+          success: false,
+          error: 'Transaction not found'
+        };
+      }
+
+      // Extract signature information if available
+      const signatures: Array<{ signer: string; publicKeyHash: string }> = [];
+      if (result.signatures && Array.isArray(result.signatures)) {
+        for (const sig of result.signatures) {
+          signatures.push({
+            signer: sig.signer?.toString() || '',
+            publicKeyHash: sig.publicKeyHash ? Buffer.from(sig.publicKeyHash).toString('hex') : ''
+          });
+        }
+      }
+
+      return {
+        success: true,
+        status: result.status || result.statusNo === 100 ? 'pending' : 'delivered',
+        principal: result.transaction?.header?.principal?.toString() || result.principal,
+        txId: result.txHash || txHash,
+        signatures
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to get transaction status', {
+        error: error instanceof Error ? error.message : String(error),
+        txHash
+      });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to query transaction'
+      };
+    }
+  }
+
+  /**
+   * Submit a vote (signature) on an existing pending transaction.
+   * This is used when a user approves/rejects a pending transaction
+   * that requires their signature.
+   */
+  async submitVoteOnPendingTransaction(params: {
+    txHash: string;
+    vote: 'approve' | 'reject' | 'abstain';
+    signerId: string;
+    signature: string;
+    publicKey: string;
+    signerVersion: number;
+  }): Promise<{
+    success: boolean;
+    signatureTxHash?: string;
+    signatureCount?: number;
+    error?: string;
+  }> {
+    try {
+      const { txHash, vote, signerId, signature, publicKey, signerVersion } = params;
+
+      this.logger.info('📝 Submitting vote on pending transaction', {
+        txHash,
+        vote,
+        signerId,
+        publicKeyLength: publicKey?.length,
+        signatureLength: signature?.length,
+        signerVersion
+      });
+
+      // Query the pending transaction first to get its details
+      const txResult = await this.client.query(txHash);
+
+      if (!txResult) {
+        return {
+          success: false,
+          error: 'Pending transaction not found'
+        };
+      }
+
+      this.logger.info('📦 Found pending transaction', {
+        txHash,
+        type: txResult.transaction?.body?.type,
+        principal: txResult.transaction?.header?.principal?.toString()
+      });
+
+      // Convert signature and public key from hex to bytes
+      const signatureBytes = Buffer.from(signature.replace(/^0x/, ''), 'hex');
+      const publicKeyBytes = Buffer.from(publicKey.replace(/^0x/, ''), 'hex');
+
+      // Get current timestamp
+      const timestamp = this.getNextTimestamp();
+
+      // Build the signature object for submission
+      // In Accumulate, we submit a signature referencing the transaction hash
+      const sigObject = {
+        type: 'ed25519',
+        signature: signatureBytes,
+        publicKey: publicKeyBytes,
+        signer: signerId,
+        signerVersion: signerVersion,
+        timestamp: timestamp,
+        transactionHash: Buffer.from(txHash.replace(/^0x/, ''), 'hex'),
+        vote: vote === 'approve' ? 1 : vote === 'reject' ? 2 : 0
+      };
+
+      this.logger.info('🔐 Constructed signature object', {
+        signer: sigObject.signer,
+        signerVersion: sigObject.signerVersion,
+        timestamp: sigObject.timestamp,
+        vote: sigObject.vote
+      });
+
+      // Submit the signature
+      // For adding a signature to an existing transaction, we submit just the signature
+      // with a reference to the transaction hash
+      const submitPayload = {
+        signatures: [sigObject]
+      };
+
+      const submitResult = await this.client.submit(submitPayload);
+
+      // Process results
+      let signatureTxHash: string | undefined;
+      let signatureCount = 0;
+
+      for (const r of submitResult) {
+        if (!r.success) {
+          this.logger.error('❌ Vote submission failed:', r);
+          return {
+            success: false,
+            error: `Vote submission failed: ${r.message || 'Unknown error'}`
+          };
+        }
+        if (r.status?.txID) {
+          signatureTxHash = r.status.txID.toString();
+        }
+      }
+
+      // Query updated transaction to get new signature count
+      try {
+        const updatedTx = await this.client.query(txHash);
+        signatureCount = updatedTx?.signatures?.length || 0;
+      } catch (queryError) {
+        this.logger.warn('⚠️ Could not query updated signature count');
+      }
+
+      this.logger.info('✅ Vote submitted successfully', {
+        signatureTxHash,
+        signatureCount,
+        vote
+      });
+
+      return {
+        success: true,
+        signatureTxHash,
+        signatureCount
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to submit vote on pending transaction', {
+        error: error instanceof Error ? error.message : String(error),
+        txHash: params.txHash
+      });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to submit vote'
+      };
+    }
   }
 }
