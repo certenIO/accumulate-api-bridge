@@ -4379,6 +4379,73 @@ export class AccumulateService {
                   operationCount: operationsArray.length,
                   operations: parsedBody.operations.map((o: any) => ({ type: o.type, authority: o.authority }))
                 });
+              } else if (txType === 'remoteTransaction' || txType === '21' || body.type === 21 || body.type === '21') {
+                // Type 21 = RemoteTransaction - may wrap an updateAccountAuth transaction
+                // Log the full body structure for debugging
+                this.logger.info('🔍 RemoteTransaction (type 21) detected', {
+                  bodyKeys: Object.keys(body || {}),
+                  fullBody: JSON.stringify(body, null, 2)
+                });
+
+                // Check for wrapped transaction body
+                // RemoteTransaction may have: body.transaction, body.inner, or direct operations
+                const innerBody = body.transaction?.body || body.inner || body;
+                const innerType = innerBody?.type?.toString() || '';
+
+                this.logger.info('🔍 RemoteTransaction inner body', {
+                  innerType,
+                  hasOperations: !!(innerBody?.operation || innerBody?.operations),
+                  innerBodyKeys: Object.keys(innerBody || {})
+                });
+
+                // Check if the inner body is an updateAccountAuth
+                if (innerType === '14' || innerType === 'updateAccountAuth' || innerBody?.operation || innerBody?.operations) {
+                  const operationsArray = innerBody.operation || innerBody.operations || body.operation || body.operations || [];
+
+                  if (operationsArray.length > 0) {
+                    // Parse as updateAccountAuth operations
+                    const getAccountAuthOperationType = (op: any): string => {
+                      const opTypeNum = typeof op.type === 'number' ? op.type : parseInt(op.type?.toString() || '0');
+                      const opTypeStr = op.type?.toString()?.toLowerCase() || op.typeStr?.toLowerCase() || '';
+
+                      if (opTypeNum === 1 || opTypeStr === 'addauthority' || opTypeStr.includes('add')) {
+                        return 'addAuthority';
+                      } else if (opTypeNum === 2 || opTypeStr === 'removeauthority' || opTypeStr.includes('remove')) {
+                        return 'removeAuthority';
+                      } else if (opTypeNum === 3 || opTypeStr === 'enable' || opTypeStr.includes('enable')) {
+                        return 'enable';
+                      } else if (opTypeNum === 4 || opTypeStr === 'disable' || opTypeStr.includes('disable')) {
+                        return 'disable';
+                      }
+                      return opTypeStr || `operation-${opTypeNum}`;
+                    };
+
+                    parsedBody = {
+                      type: 'updateAccountAuth',
+                      operations: operationsArray.map((op: any) => ({
+                        type: getAccountAuthOperationType(op),
+                        authority: op.authority?.toString()
+                      }))
+                    };
+
+                    this.logger.info('📝 Parsed updateAccountAuth from RemoteTransaction', {
+                      operationCount: operationsArray.length,
+                      operations: parsedBody.operations
+                    });
+                  } else {
+                    parsedBody = {
+                      type: 'remoteTransaction',
+                      innerType,
+                      raw: JSON.stringify(body)
+                    };
+                  }
+                } else {
+                  parsedBody = {
+                    type: 'remoteTransaction',
+                    innerType,
+                    raw: JSON.stringify(body)
+                  };
+                }
               } else {
                 // Generic body parsing
                 parsedBody = {

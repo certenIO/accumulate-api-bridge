@@ -1432,12 +1432,36 @@ app.get('/api/v1/account/authorities', async (req, res) => {
             hasBody: !!pendingTx.body
           });
 
-          // Check if this is an updateAccountAuth transaction (type 14)
-          // Handle both string and numeric types
-          const txTypeStr = String(pendingTx.txType).toLowerCase();
-          if (txTypeStr === '14' || txTypeStr === 'updateaccountauth') {
-            const body = pendingTx.body;
+          // Log full body for debugging
+          console.log(`📝 Pending tx full body:`, JSON.stringify(pendingTx.body, null, 2));
 
+          // Check transaction type - handle both direct updateAccountAuth (type 14)
+          // and RemoteTransaction (type 21) which wraps the actual transaction
+          const txTypeStr = String(pendingTx.txType).toLowerCase();
+          let body = pendingTx.body;
+          let isUpdateAccountAuth = false;
+
+          // Type 14 = updateAccountAuth directly
+          if (txTypeStr === '14' || txTypeStr === 'updateaccountauth') {
+            isUpdateAccountAuth = true;
+          }
+          // Type 21 = RemoteTransaction - check inner transaction type
+          else if (txTypeStr === '21' || txTypeStr === 'remotetransaction') {
+            console.log(`🔍 Type 21 (RemoteTransaction) detected, checking inner body...`);
+            // RemoteTransaction may have the actual body type inside
+            const innerType = body?.type?.toString()?.toLowerCase() || '';
+            console.log(`  Inner body type: ${innerType}`);
+            if (innerType === '14' || innerType === 'updateaccountauth') {
+              isUpdateAccountAuth = true;
+            }
+            // Also check if body has operations directly (some formats embed operations)
+            if (body?.operations && Array.isArray(body.operations)) {
+              console.log(`  Found operations array directly in type 21 body`);
+              isUpdateAccountAuth = true;
+            }
+          }
+
+          if (isUpdateAccountAuth) {
             console.log(`🔐 updateAccountAuth tx body:`, JSON.stringify(body, null, 2));
 
             if (body?.operations && Array.isArray(body.operations)) {
