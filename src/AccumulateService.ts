@@ -3402,6 +3402,23 @@ export class AccumulateService {
                 // Get the primary key address for backward compatibility
                 const primaryKeyAddress = entries.length > 0 ? entries[0].keyHash : 'unknown';
 
+                // Query pending transactions for this key page
+                let pendingTxs: Array<{ txHash: string; txType: string }> = [];
+                try {
+                  const pendingResult = await this.getPendingTransactions(keyPageUrl);
+                  if (pendingResult.success && pendingResult.pending) {
+                    pendingTxs = pendingResult.pending.map(tx => ({
+                      txHash: tx.txHash,
+                      txType: tx.txType
+                    }));
+                  }
+                } catch (pendingError) {
+                  this.logger.warn('⚠️ Failed to query pending transactions for key page', {
+                    keyPageUrl,
+                    error: pendingError instanceof Error ? pendingError.message : String(pendingError)
+                  });
+                }
+
                 signers.push({
                   url: keyPageUrl,
                   keyAddress: primaryKeyAddress, // Keep for backward compatibility
@@ -3411,14 +3428,17 @@ export class AccumulateService {
                   keys: keyPageData.keys || [], // Raw keys from blockchain
                   entries: entries, // Parsed entries (all keys and delegates)
                   entryCount: entries.length,
-                  type: entries.length > 1 ? 'multi-signature' : 'single-signature'
+                  type: entries.length > 1 ? 'multi-signature' : 'single-signature',
+                  pendingCount: pendingTxs.length,
+                  pendingTransactions: pendingTxs
                 });
 
                 this.logger.info('✅ KeyPage processed', {
                   keyPageUrl,
                   entryCount: entries.length,
                   threshold: keyPageData.acceptThreshold || keyPageData.threshold || 1,
-                  version: keyPageData.version || 1
+                  version: keyPageData.version || 1,
+                  pendingCount: pendingTxs.length
                 });
               }
             } catch (error) {
@@ -3426,11 +3446,40 @@ export class AccumulateService {
             }
           }
 
+          // Query pending transactions for the key book itself
+          let keyBookPendingTxs: Array<{ txHash: string; txType: string }> = [];
+          try {
+            const keyBookPendingResult = await this.getPendingTransactions(keyBookUrl);
+            if (keyBookPendingResult.success && keyBookPendingResult.pending) {
+              keyBookPendingTxs = keyBookPendingResult.pending.map(tx => ({
+                txHash: tx.txHash,
+                txType: tx.txType
+              }));
+            }
+          } catch (pendingError) {
+            this.logger.warn('⚠️ Failed to query pending transactions for key book', {
+              keyBookUrl,
+              error: pendingError instanceof Error ? pendingError.message : String(pendingError)
+            });
+          }
+
+          // Calculate total pending across all key pages
+          const totalKeyPagePending = signers.reduce((sum, s) => sum + (s.pendingCount || 0), 0);
+
           governanceStructure.push({
             keyBookUrl,
             keyBookName,
             keyPages: keyPages.length,
-            signers
+            signers,
+            pendingCount: keyBookPendingTxs.length,
+            pendingTransactions: keyBookPendingTxs,
+            totalKeyPagePending
+          });
+
+          this.logger.info('📖 KeyBook pending summary', {
+            keyBookUrl,
+            keyBookPending: keyBookPendingTxs.length,
+            totalKeyPagePending
           });
 
         } catch (error) {
