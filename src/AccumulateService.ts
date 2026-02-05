@@ -4329,6 +4329,56 @@ export class AccumulateService {
                   operationCount: operationsArray.length,
                   operations: parsedBody.operations.map((o: any) => o.type)
                 });
+              } else if (txType === 'updateAccountAuth' || txType === '14' || txType.toLowerCase() === 'updateaccountauth' || body.type === 14 || body.type === '14') {
+                // For updateAccountAuth transactions, extract the operations
+                // AccountAuthOperationType enum values from Accumulate:
+                // 1 = AddAuthority, 2 = RemoveAuthority, 3 = Enable, 4 = Disable
+                const getAccountAuthOperationType = (op: any): string => {
+                  const opTypeNum = typeof op.type === 'number' ? op.type : parseInt(op.type?.toString() || '0');
+                  const opTypeStr = op.type?.toString()?.toLowerCase() || op.typeStr?.toLowerCase() || '';
+
+                  if (opTypeNum === 1 || opTypeStr === 'addauthority' || opTypeStr.includes('add')) {
+                    return 'addAuthority';
+                  } else if (opTypeNum === 2 || opTypeStr === 'removeauthority' || opTypeStr.includes('remove')) {
+                    return 'removeAuthority';
+                  } else if (opTypeNum === 3 || opTypeStr === 'enable' || opTypeStr.includes('enable')) {
+                    return 'enable';
+                  } else if (opTypeNum === 4 || opTypeStr === 'disable' || opTypeStr.includes('disable')) {
+                    return 'disable';
+                  }
+                  return opTypeStr || `operation-${opTypeNum}`;
+                };
+
+                // Handle both 'operation' (singular array) and 'operations' (plural) field names
+                const operationsArray = body.operation || body.operations || [];
+
+                this.logger.info('🔍 Raw updateAccountAuth operations data', {
+                  hasOperation: !!body.operation,
+                  hasOperations: !!body.operations,
+                  operationsCount: operationsArray.length,
+                  rawOperations: operationsArray.map((op: any) => ({
+                    type: op.type,
+                    typeOf: typeof op.type,
+                    authority: op.authority?.toString()
+                  }))
+                });
+
+                parsedBody = {
+                  type: 'updateAccountAuth',
+                  operations: operationsArray.map((op: any) => {
+                    const operationType = getAccountAuthOperationType(op);
+                    this.logger.info('🔍 AccountAuth operation type resolved', { rawType: op.type, resolved: operationType });
+                    return {
+                      type: operationType,
+                      authority: op.authority?.toString()
+                    };
+                  })
+                };
+
+                this.logger.info('📝 Parsed updateAccountAuth operations', {
+                  operationCount: operationsArray.length,
+                  operations: parsedBody.operations.map((o: any) => ({ type: o.type, authority: o.authority }))
+                });
               } else {
                 // Generic body parsing
                 parsedBody = {
