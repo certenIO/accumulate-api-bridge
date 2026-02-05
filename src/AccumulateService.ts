@@ -3967,16 +3967,86 @@ export class AccumulateService {
     try {
       this.logger.info('🔍 Discovering KeyBooks for ADI', { adiUrl });
 
-      // Due to SDK query issues in Docker environment, we cannot reliably discover
-      // additional keybooks. Return empty array - this is accurate since most ADIs
-      // only have their main keybook which is already being managed as an authority.
-
-      this.logger.info('ℹ️ Keybook discovery not available - returning empty list', {
-        adiUrl,
-        reason: 'SDK query issues in containerized environment'
+      // Query the ADI directory to get all accounts
+      const adiResult = await this.client.query(adiUrl, {
+        queryType: 'directory',
+        range: { expand: false }
       });
 
-      return [];
+      this.logger.info('🔍 ADI directory query for keybook discovery', {
+        adiUrl,
+        recordCount: adiResult?.records?.length || 0
+      });
+
+      const keyBooks: any[] = [];
+
+      if (adiResult?.records && Array.isArray(adiResult.records)) {
+        for (const record of adiResult.records) {
+          const itemUrl = record?.value?.toString();
+
+          // Check if this looks like a KeyBook URL (contains /book but not /book/ which would be a KeyPage)
+          if (typeof itemUrl === 'string' && itemUrl.includes('/book') && !itemUrl.includes('/book/')) {
+            // Query the account to verify it's actually a KeyBook (type 10)
+            try {
+              const accountResult = await this.client.query(itemUrl);
+
+              // Type 10 = keyBook according to the Accumulate API
+              if (accountResult?.account?.type === 10) {
+                const keyBookName = itemUrl.split('/').pop() || 'book';
+
+                keyBooks.push({
+                  id: itemUrl,
+                  keyBookUrl: itemUrl,
+                  keyBookName: keyBookName,
+                  pageCount: accountResult.account.pageCount || 1,
+                  type: 'keyBook'
+                });
+
+                this.logger.info('✅ Found KeyBook', {
+                  itemUrl,
+                  keyBookName,
+                  pageCount: accountResult.account.pageCount
+                });
+              }
+            } catch (queryError) {
+              this.logger.warn('⚠️ Failed to query potential KeyBook', {
+                itemUrl,
+                error: queryError instanceof Error ? queryError.message : String(queryError)
+              });
+            }
+          }
+        }
+      }
+
+      // Fallback: if no KeyBooks found in directory, try default /book pattern
+      if (keyBooks.length === 0) {
+        const defaultBookUrl = `${adiUrl}/book`;
+        try {
+          const bookResult = await this.client.query(defaultBookUrl);
+
+          if (bookResult?.account?.type === 10) {
+            keyBooks.push({
+              id: defaultBookUrl,
+              keyBookUrl: defaultBookUrl,
+              keyBookName: 'book',
+              pageCount: bookResult.account.pageCount || 1,
+              type: 'keyBook'
+            });
+
+            this.logger.info('✅ Found default KeyBook', { defaultBookUrl });
+          }
+        } catch (error) {
+          this.logger.info('ℹ️ No default KeyBook found', { defaultBookUrl });
+        }
+      }
+
+      this.logger.info('📋 KeyBook discovery complete', {
+        adiUrl,
+        keyBooksFound: keyBooks.length,
+        keyBooks: keyBooks.map(kb => kb.keyBookUrl)
+      });
+
+      return keyBooks;
 
     } catch (error) {
       this.logger.error('❌ Failed to discover ADI KeyBooks', {
