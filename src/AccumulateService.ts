@@ -4183,22 +4183,47 @@ export class AccumulateService {
             if (body) {
               // For updateKeyPage transactions, extract the operations
               if (txType === 'updateKeyPage' || body.type === 15) {
+                // Map KeyPageOperation types to readable names
+                const getOperationType = (op: any): string => {
+                  const opTypeNum = typeof op.type === 'number' ? op.type : parseInt(op.type?.toString() || '0');
+                  const opTypeStr = op.type?.toString()?.toLowerCase() || op.typeStr?.toLowerCase() || '';
+
+                  // Check if it's a delegate operation (has delegate field)
+                  const isDelegate = !!(op.entry?.delegate || op.newEntry?.delegate);
+
+                  // KeyPageOperationType enum values from Accumulate:
+                  // 1 = Add, 2 = Remove, 3 = Update, 4 = SetThreshold
+                  if (opTypeNum === 1 || opTypeStr.includes('add')) {
+                    return isDelegate ? 'addDelegate' : 'addKey';
+                  } else if (opTypeNum === 2 || opTypeStr.includes('remove')) {
+                    return isDelegate ? 'removeDelegate' : 'removeKey';
+                  } else if (opTypeNum === 3 || opTypeStr.includes('update')) {
+                    return isDelegate ? 'updateDelegate' : 'updateKey';
+                  } else if (opTypeNum === 4 || opTypeStr.includes('threshold')) {
+                    return 'updateThreshold';
+                  }
+                  return opTypeStr || `operation-${opTypeNum}`;
+                };
+
                 parsedBody = {
                   type: 'updateKeyPage',
-                  operations: body.operations?.map((op: any) => ({
-                    type: op.type?.toString() || op.typeStr,
-                    entry: op.entry ? {
-                      keyHash: op.entry.keyHash ? Buffer.from(op.entry.keyHash).toString('hex') : undefined,
-                      delegate: op.entry.delegate?.toString()
-                    } : undefined,
-                    oldEntry: op.oldEntry ? {
-                      keyHash: op.oldEntry.keyHash ? Buffer.from(op.oldEntry.keyHash).toString('hex') : undefined
-                    } : undefined,
-                    newEntry: op.newEntry ? {
-                      keyHash: op.newEntry.keyHash ? Buffer.from(op.newEntry.keyHash).toString('hex') : undefined
-                    } : undefined,
-                    threshold: op.threshold
-                  })) || []
+                  operations: body.operations?.map((op: any) => {
+                    const operationType = getOperationType(op);
+                    return {
+                      type: operationType,
+                      entry: op.entry ? {
+                        keyHash: op.entry.keyHash ? Buffer.from(op.entry.keyHash).toString('hex') : undefined,
+                        delegate: op.entry.delegate?.toString()
+                      } : undefined,
+                      oldEntry: op.oldEntry ? {
+                        keyHash: op.oldEntry.keyHash ? Buffer.from(op.oldEntry.keyHash).toString('hex') : undefined
+                      } : undefined,
+                      newEntry: op.newEntry ? {
+                        keyHash: op.newEntry.keyHash ? Buffer.from(op.newEntry.keyHash).toString('hex') : undefined
+                      } : undefined,
+                      threshold: op.threshold
+                    };
+                  }) || []
                 };
               } else {
                 // Generic body parsing
