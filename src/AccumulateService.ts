@@ -4333,18 +4333,20 @@ export class AccumulateService {
                 // For updateAccountAuth transactions, extract the operations
                 // AccountAuthOperationType enum values from Accumulate:
                 // 1 = AddAuthority, 2 = RemoveAuthority, 3 = Enable, 4 = Disable
+                // AccountAuthOperationType enum in Accumulate:
+                // 1 = Enable, 2 = Disable, 3 = AddAuthority, 4 = RemoveAuthority
                 const getAccountAuthOperationType = (op: any): string => {
                   const opTypeNum = typeof op.type === 'number' ? op.type : parseInt(op.type?.toString() || '0');
                   const opTypeStr = op.type?.toString()?.toLowerCase() || op.typeStr?.toLowerCase() || '';
 
-                  if (opTypeNum === 1 || opTypeStr === 'addauthority' || opTypeStr.includes('add')) {
-                    return 'addAuthority';
-                  } else if (opTypeNum === 2 || opTypeStr === 'removeauthority' || opTypeStr.includes('remove')) {
-                    return 'removeAuthority';
-                  } else if (opTypeNum === 3 || opTypeStr === 'enable' || opTypeStr.includes('enable')) {
+                  if (opTypeNum === 1 || opTypeStr === 'enable' || opTypeStr.includes('enable')) {
                     return 'enable';
-                  } else if (opTypeNum === 4 || opTypeStr === 'disable' || opTypeStr.includes('disable')) {
+                  } else if (opTypeNum === 2 || opTypeStr === 'disable' || opTypeStr.includes('disable')) {
                     return 'disable';
+                  } else if (opTypeNum === 3 || opTypeStr === 'addauthority' || opTypeStr.includes('add')) {
+                    return 'addAuthority';
+                  } else if (opTypeNum === 4 || opTypeStr === 'removeauthority' || opTypeStr.includes('remove')) {
+                    return 'removeAuthority';
                   }
                   return opTypeStr || `operation-${opTypeNum}`;
                 };
