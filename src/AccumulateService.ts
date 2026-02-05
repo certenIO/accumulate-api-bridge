@@ -4063,30 +4063,52 @@ export class AccumulateService {
     try {
       this.logger.info('🔍 Querying transaction', { transactionUrl, prove });
 
-      console.log('🔍 Debug: client instance', { hasClient: !!this.client, clientType: typeof this.client });
-      console.log('🔍 Debug: query parameters', { url: transactionUrl, urlType: typeof transactionUrl, urlLength: transactionUrl?.length, prove });
+      // Normalize the input - extract hash from various formats
+      // Supported formats:
+      // - acc://hash@signer.acme/book/1 -> extract hash
+      // - hash@signer.acme/book/1 -> extract hash
+      // - acc://hash -> extract hash
+      // - plain hash (64 hex chars) -> use as-is
+      let queryUrl = transactionUrl.trim();
+
+      // Remove acc:// prefix if present
+      if (queryUrl.toLowerCase().startsWith('acc://')) {
+        queryUrl = queryUrl.substring(6);
+      }
+
+      // If contains @, extract the hash part before @
+      if (queryUrl.includes('@')) {
+        queryUrl = queryUrl.split('@')[0];
+      }
+
+      // If it's a 64-character hex string (transaction hash), query it directly
+      const isHash = /^[a-fA-F0-9]{64}$/.test(queryUrl);
+
+      console.log('🔍 Debug: normalized query', {
+        original: transactionUrl,
+        normalized: queryUrl,
+        isHash
+      });
 
       const queryOptions: any = {};
       if (prove) {
         queryOptions.prove = true;
       }
 
-      console.log('🔍 Debug: calling client.query with', { transactionUrl, queryOptions });
-
       // Try different query approaches
       let result;
       if (prove) {
         // Try with options object
         try {
-          result = await this.client.query(transactionUrl, queryOptions);
+          result = await this.client.query(queryUrl, queryOptions);
         } catch (error) {
           console.log('🔍 First approach failed, trying without options:', error);
           // Fallback to simple query
-          result = await this.client.query(transactionUrl);
+          result = await this.client.query(queryUrl);
         }
       } else {
         // Simple query without options
-        result = await this.client.query(transactionUrl);
+        result = await this.client.query(queryUrl);
       }
 
       this.logger.info('📊 Transaction query result', {
