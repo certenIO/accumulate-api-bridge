@@ -4063,30 +4063,29 @@ export class AccumulateService {
     try {
       this.logger.info('🔍 Querying transaction', { transactionUrl, prove });
 
-      // Normalize the input - extract hash from various formats
-      // Supported formats:
-      // - acc://hash@signer.acme/book/1 -> extract hash
-      // - hash@signer.acme/book/1 -> extract hash
-      // - acc://hash -> extract hash
-      // - plain hash (64 hex chars) -> use as-is
+      // Normalize the input to proper Accumulate transaction URL format
+      // Transaction URLs need to be: acc://txhash@signer
       let queryUrl = transactionUrl.trim();
 
-      // Remove acc:// prefix if present
-      if (queryUrl.toLowerCase().startsWith('acc://')) {
-        queryUrl = queryUrl.substring(6);
+      // Ensure acc:// prefix
+      if (!queryUrl.toLowerCase().startsWith('acc://')) {
+        queryUrl = 'acc://' + queryUrl;
       }
 
-      // If contains @, extract the hash part before @
-      if (queryUrl.includes('@')) {
-        queryUrl = queryUrl.split('@')[0];
-      }
+      // Extract the hash part (after acc:// and before @)
+      const withoutPrefix = queryUrl.substring(6); // Remove acc://
+      const hashPart = withoutPrefix.includes('@') ? withoutPrefix.split('@')[0] : withoutPrefix;
+      const isHash = /^[a-fA-F0-9]{64}$/.test(hashPart);
 
-      // If it's a 64-character hex string (transaction hash), query it directly
-      const isHash = /^[a-fA-F0-9]{64}$/.test(queryUrl);
+      // If it's a bare hash without @signer, add @unknown suffix
+      if (isHash && !queryUrl.includes('@')) {
+        queryUrl = `acc://${hashPart}@unknown`;
+      }
 
       console.log('🔍 Debug: normalized query', {
         original: transactionUrl,
         normalized: queryUrl,
+        hashPart,
         isHash
       });
 
