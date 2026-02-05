@@ -3403,13 +3403,14 @@ export class AccumulateService {
                 const primaryKeyAddress = entries.length > 0 ? entries[0].keyHash : 'unknown';
 
                 // Query pending transactions for this key page
-                let pendingTxs: Array<{ txHash: string; txType: string }> = [];
+                let pendingTxs: Array<{ txHash: string; txType: string; body?: any }> = [];
                 try {
                   const pendingResult = await this.getPendingTransactions(keyPageUrl);
                   if (pendingResult.success && pendingResult.pending) {
                     pendingTxs = pendingResult.pending.map(tx => ({
                       txHash: tx.txHash,
-                      txType: tx.txType
+                      txType: tx.txType,
+                      body: tx.body // Include the parsed body with operations
                     }));
                   }
                 } catch (pendingError) {
