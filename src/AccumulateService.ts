@@ -4192,16 +4192,27 @@ export class AccumulateService {
                   const isDelegate = !!(op.entry?.delegate || op.newEntry?.delegate);
 
                   // KeyPageOperationType enum values from Accumulate:
-                  // 1 = Add, 2 = Remove, 3 = Update, 4 = SetThreshold
+                  // 1 = Add, 2 = Remove, 3 = Update (keys only), 4 = SetThreshold
+                  // Note: Delegates can only be added or removed, not updated
                   // Also handle string types: "add", "remove", "update", "setThreshold"
                   if (opTypeNum === 1 || opTypeStr === 'add' || opTypeStr.includes('add')) {
                     return isDelegate ? 'addDelegate' : 'addKey';
                   } else if (opTypeNum === 2 || opTypeStr === 'remove' || opTypeStr.includes('remove')) {
                     return isDelegate ? 'removeDelegate' : 'removeKey';
                   } else if (opTypeNum === 3 || opTypeStr === 'update' || opTypeStr.includes('update')) {
-                    return isDelegate ? 'updateDelegate' : 'updateKey';
+                    // Type 3 is Update - only valid for keys, not delegates
+                    // If we see a delegate with type 3, it's likely meant to be an add operation
+                    if (isDelegate) {
+                      this.logger.warn('⚠️ Unexpected: delegate with update operation type, treating as addDelegate');
+                      return 'addDelegate';
+                    }
+                    return 'updateKey';
                   } else if (opTypeNum === 4 || opTypeStr === 'setthreshold' || opTypeStr.includes('threshold')) {
                     return 'updateThreshold';
+                  }
+                  // Fallback: if we have a delegate, assume add; otherwise unknown
+                  if (isDelegate) {
+                    return 'addDelegate';
                   }
                   return opTypeStr || `operation-${opTypeNum}`;
                 };
