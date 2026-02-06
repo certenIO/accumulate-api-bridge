@@ -4662,10 +4662,15 @@ export class AccumulateService {
       // Compute signature metadata hash using the SDK's encode function
       const sigMdHash = sha256(encode(signatureObj));
 
-      // Compute the complete dataForSignature: SHA256(initiatorHash + sigMdHash)
+      // Compute the complete dataForSignature: SHA256(sigMdHash + txHash)
+      // This matches the Go verification (signingHash), TypeScript SDK (signRaw),
+      // and the working Dart mobile app (dataForSignature method).
+      // IMPORTANT: Use the full transaction hash (not just body hash), and
+      // sigMdHash comes FIRST, then the transaction hash.
+      const txHashBytes = Buffer.from(hashPart, 'hex');
       const dataForSignatureBytes = sha256(Buffer.concat([
-        Buffer.from(bodyHashBytes),
-        Buffer.from(sigMdHash)
+        Buffer.from(sigMdHash),
+        txHashBytes
       ]));
       const dataForSignature = Buffer.from(dataForSignatureBytes).toString('hex');
 
