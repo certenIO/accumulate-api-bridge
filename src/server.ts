@@ -4197,19 +4197,21 @@ app.get('/api/v1/account/:url/pending', async (req, res) => {
  * - signature: string (hex-encoded signature)
  * - publicKey: string (hex-encoded public key)
  * - signerVersion?: number (optional key page version)
+ * - timestamp?: number (microseconds timestamp used when signing - required for signature verification)
  */
 app.post('/api/v1/pending/:txHash/vote', async (req, res) => {
   console.log('\n📝 POST /api/v1/pending/:txHash/vote');
 
   try {
     const txHash = decodeURIComponent(req.params.txHash);
-    const { vote, signerId, signature, publicKey, signerVersion } = req.body;
+    const { vote, signerId, signature, publicKey, signerVersion, timestamp } = req.body;
 
     console.log('  Transaction Hash:', txHash);
     console.log('  Vote:', vote);
     console.log('  Signer ID:', signerId);
     console.log('  Has Signature:', !!signature);
     console.log('  Has Public Key:', !!publicKey);
+    console.log('  Timestamp:', timestamp || '(will be generated)');
 
     // Validate required fields
     if (!vote || !['approve', 'reject', 'abstain'].includes(vote)) {
@@ -4247,7 +4249,8 @@ app.post('/api/v1/pending/:txHash/vote', async (req, res) => {
       signerId,
       signature,
       publicKey,
-      signerVersion: signerVersion || 1
+      signerVersion: signerVersion || 1,
+      timestamp: timestamp ? Number(timestamp) : undefined
     });
 
     if (!result.success) {

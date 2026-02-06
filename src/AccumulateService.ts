@@ -4546,6 +4546,7 @@ export class AccumulateService {
     signature: string;
     publicKey: string;
     signerVersion: number;
+    timestamp?: number; // Timestamp in microseconds (must match what was signed)
   }): Promise<{
     success: boolean;
     signatureTxHash?: string;
@@ -4553,7 +4554,7 @@ export class AccumulateService {
     error?: string;
   }> {
     try {
-      const { txHash, vote, signerId, signature, publicKey, signerVersion } = params;
+      const { txHash, vote, signerId, signature, publicKey, signerVersion, timestamp: providedTimestamp } = params;
 
       this.logger.info('📝 Submitting vote on pending transaction', {
         txHash,
@@ -4561,7 +4562,8 @@ export class AccumulateService {
         signerId,
         publicKeyLength: publicKey?.length,
         signatureLength: signature?.length,
-        signerVersion
+        signerVersion,
+        hasProvidedTimestamp: !!providedTimestamp
       });
 
       // Normalize txHash to proper transaction URL format for querying
@@ -4611,8 +4613,14 @@ export class AccumulateService {
       const signatureBytes = Buffer.from(signature.replace(/^0x/, ''), 'hex');
       const publicKeyBytes = Buffer.from(publicKey.replace(/^0x/, ''), 'hex');
 
-      // Get current timestamp
-      const timestamp = this.getNextTimestamp();
+      // Use provided timestamp (from KeyVault signing) or generate one
+      // IMPORTANT: The timestamp must match what was used when creating the signature
+      // If we generate a different timestamp, the signature verification will fail
+      const timestamp = providedTimestamp || this.getNextTimestamp();
+      this.logger.info('🕐 Using timestamp', {
+        timestamp,
+        source: providedTimestamp ? 'provided' : 'generated'
+      });
 
       // Build the signature object for submission
       // In Accumulate, we submit a signature referencing the transaction hash
@@ -4635,12 +4643,20 @@ export class AccumulateService {
         vote: sigObject.vote
       });
 
-      // Submit the signature
-      // For adding a signature to an existing transaction, we submit just the signature
-      // with a reference to the transaction hash
+      // Submit the signature along with the original transaction
+      // For adding a signature to a pending multi-sig transaction, we must include
+      // the original transaction in the envelope alongside our new signature.
+      // This is required because the network needs both the transaction body and
+      // the new signature to validate and add to the pending signature set.
       const submitPayload = {
+        transaction: [txResult.transaction],
         signatures: [sigObject]
       };
+
+      this.logger.info('📤 Submitting envelope with original transaction', {
+        hasTransaction: !!txResult.transaction,
+        transactionType: txResult.transaction?.body?.type
+      });
 
       const submitResult = await this.client.submit(submitPayload);
 
