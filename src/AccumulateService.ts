@@ -4603,10 +4603,46 @@ export class AccumulateService {
         };
       }
 
+      // Debug: Log the full structure to understand the response format
+      this.logger.info('🔍 Query result structure', {
+        topLevelKeys: Object.keys(txResult || {}),
+        hasTransaction: !!txResult.transaction,
+        hasMessage: !!txResult.message,
+        messageKeys: txResult.message ? Object.keys(txResult.message) : [],
+        hasMessageTransaction: !!txResult.message?.transaction,
+      });
+
+      // Extract the transaction from the query result
+      // The Accumulate SDK v3 may return the transaction in different locations:
+      // - txResult.transaction (direct)
+      // - txResult.message.transaction (nested in message record)
+      // - For some record types, the entire message IS the transaction
+      let rawTransaction = txResult.transaction;
+
+      if (!rawTransaction && txResult.message) {
+        // Transaction records have the transaction inside the message
+        rawTransaction = txResult.message.transaction || txResult.message;
+        this.logger.info('📦 Extracted transaction from message', {
+          hasTransaction: !!rawTransaction,
+          transactionKeys: rawTransaction ? Object.keys(rawTransaction) : []
+        });
+      }
+
+      if (!rawTransaction) {
+        this.logger.error('❌ Could not extract transaction from query result', {
+          txHash,
+          resultKeys: Object.keys(txResult || {})
+        });
+        return {
+          success: false,
+          error: 'Could not extract transaction body from query result'
+        };
+      }
+
       this.logger.info('📦 Found pending transaction', {
         txHash,
-        type: txResult.transaction?.body?.type,
-        principal: txResult.transaction?.header?.principal?.toString()
+        type: rawTransaction.body?.type,
+        principal: rawTransaction.header?.principal?.toString()
       });
 
       // Convert signature and public key from hex to bytes
@@ -4625,6 +4661,8 @@ export class AccumulateService {
       // Build the signature object for submission
       // In Accumulate, we submit a signature referencing the transaction hash
       // Use the pure 64-char hex hash (hashPart), not the full URL
+      // Vote codes: accept/approve = 0, reject = 1, abstain = 2, suggest = 3
+      const voteCode = vote === 'approve' ? 0 : vote === 'reject' ? 1 : vote === 'abstain' ? 2 : 0;
       const sigObject = {
         type: 'ed25519',
         signature: signatureBytes,
@@ -4633,7 +4671,7 @@ export class AccumulateService {
         signerVersion: signerVersion,
         timestamp: timestamp,
         transactionHash: Buffer.from(hashPart.replace(/^0x/, ''), 'hex'),
-        vote: vote === 'approve' ? 1 : vote === 'reject' ? 2 : 0
+        vote: voteCode
       };
 
       this.logger.info('🔐 Constructed signature object', {
@@ -4649,13 +4687,14 @@ export class AccumulateService {
       // This is required because the network needs both the transaction body and
       // the new signature to validate and add to the pending signature set.
       const submitPayload = {
-        transaction: [txResult.transaction],
+        transaction: [rawTransaction],
         signatures: [sigObject]
       };
 
       this.logger.info('📤 Submitting envelope with original transaction', {
-        hasTransaction: !!txResult.transaction,
-        transactionType: txResult.transaction?.body?.type
+        hasTransaction: !!rawTransaction,
+        transactionType: rawTransaction?.body?.type,
+        transactionKeys: Object.keys(rawTransaction || {})
       });
 
       const submitResult = await this.client.submit(submitPayload);
