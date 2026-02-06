@@ -12,6 +12,8 @@ let Envelope: any;
 let encode: any;  // For encoding signature metadata
 let sha256: any;  // For hashing
 let hashBody: any;  // For computing body hash (initiatorHash)
+let ED25519Signature: any;  // For creating signature objects
+let AccURL: any;  // For URL parsing
 
 import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
@@ -89,6 +91,12 @@ export class AccumulateService {
       ({ api_v3, api_v2, core, ED25519Key, Signer } = accumulate);
       TransactionType = core.TransactionType;
       Transaction = core.Transaction;
+      ED25519Signature = core.ED25519Signature;
+
+      // Import URL from address module
+      // @ts-ignore: Module path determined at runtime
+      const addressModule = await import(`${sdkUrl}/address/index.js`);
+      AccURL = addressModule.URL;
 
       // Import Envelope from messaging
       // @ts-ignore: Module path determined at runtime
@@ -4544,10 +4552,13 @@ export class AccumulateService {
    * Get signing data for a pending transaction.
    * This computes the complete dataForSignature that KeyVault should sign directly.
    * Uses the SDK's encode function for proper metadata encoding.
+   *
+   * IMPORTANT: publicKey is required because sigMdHash includes the public key.
    */
   async getPendingTransactionSigningData(params: {
     txHash: string;
     signerId: string;
+    publicKey: string;   // Required - hex-encoded public key for sigMdHash computation
     timestamp?: number;  // Optional - if not provided, one will be generated
   }): Promise<{
     success: boolean;
@@ -4559,7 +4570,11 @@ export class AccumulateService {
     error?: string;
   }> {
     try {
-      const { txHash, signerId, timestamp: providedTimestamp } = params;
+      const { txHash, signerId, publicKey, timestamp: providedTimestamp } = params;
+
+      if (!publicKey) {
+        return { success: false, error: 'publicKey is required for signing data computation' };
+      }
 
       this.logger.info('🔐 Getting signing data for pending transaction', {
         txHash,
@@ -4621,13 +4636,22 @@ export class AccumulateService {
       // Generate or use provided timestamp (microseconds)
       const timestamp = providedTimestamp || this.getNextTimestamp();
 
-      // Compute signature metadata hash using the SDK's encode function
+      // Convert public key from hex to bytes
+      const publicKeyBytes = Buffer.from(publicKey.replace(/^0x/, ''), 'hex');
+
+      // Create a properly typed ED25519Signature object for encoding
       // This ensures the encoding matches what Accumulate expects
-      const sigMdHash = sha256(encode({
-        url: signerId,
-        version: signerVersion,
+      // IMPORTANT: sigMdHash includes type, publicKey, signer, signerVersion, timestamp
+      const signerUrl = AccURL.parse(signerId);
+      const signatureObj = new ED25519Signature({
+        publicKey: publicKeyBytes,
+        signer: signerUrl,
+        signerVersion: signerVersion,
         timestamp: timestamp
-      }));
+      });
+
+      // Compute signature metadata hash using the SDK's encode function
+      const sigMdHash = sha256(encode(signatureObj));
 
       // Compute the complete dataForSignature: SHA256(initiatorHash + sigMdHash)
       const dataForSignatureBytes = sha256(Buffer.concat([

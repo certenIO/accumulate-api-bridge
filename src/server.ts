@@ -4193,6 +4193,7 @@ app.get('/api/v1/account/:url/pending', async (req, res) => {
  *
  * Query params:
  * - signerId: string (key page URL that will sign)
+ * - publicKey: string (hex-encoded public key - required for sigMdHash)
  * - timestamp?: number (optional microseconds timestamp - if not provided, one is generated)
  *
  * Response:
@@ -4208,10 +4209,12 @@ app.get('/api/v1/pending/:txHash/signing-data', async (req, res) => {
   try {
     const txHash = decodeURIComponent(req.params.txHash);
     const signerId = req.query.signerId as string;
+    const publicKey = req.query.publicKey as string;
     const timestamp = req.query.timestamp ? Number(req.query.timestamp) : undefined;
 
     console.log('  Transaction Hash:', txHash);
     console.log('  Signer ID:', signerId);
+    console.log('  Public Key:', publicKey ? publicKey.substring(0, 16) + '...' : 'missing');
     console.log('  Timestamp:', timestamp || 'will be generated');
 
     if (!signerId) {
@@ -4221,9 +4224,17 @@ app.get('/api/v1/pending/:txHash/signing-data', async (req, res) => {
       });
     }
 
+    if (!publicKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'publicKey query parameter is required'
+      });
+    }
+
     const result = await accumulateService.getPendingTransactionSigningData({
       txHash,
       signerId,
+      publicKey,
       timestamp
     });
 
