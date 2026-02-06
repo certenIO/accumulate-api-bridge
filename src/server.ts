@@ -4186,6 +4186,66 @@ app.get('/api/v1/account/:url/pending', async (req, res) => {
 // ==================== Pending Actions Endpoints ====================
 
 /**
+ * GET /api/v1/pending/:txHash/signing-data
+ *
+ * Get signing data for a pending transaction.
+ * Returns the initiatorHash (body hash) needed for computing dataForSignature.
+ *
+ * Query params:
+ * - signerId: string (key page URL that will sign)
+ *
+ * Response:
+ * - transactionHash: string (the full transaction hash)
+ * - initiatorHash: string (body hash, used for dataForSignature computation)
+ * - signerVersion: number (key page version)
+ */
+app.get('/api/v1/pending/:txHash/signing-data', async (req, res) => {
+  console.log('\n🔐 GET /api/v1/pending/:txHash/signing-data');
+
+  try {
+    const txHash = decodeURIComponent(req.params.txHash);
+    const signerId = req.query.signerId as string;
+
+    console.log('  Transaction Hash:', txHash);
+    console.log('  Signer ID:', signerId);
+
+    if (!signerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'signerId query parameter is required'
+      });
+    }
+
+    const result = await accumulateService.getPendingTransactionSigningData({
+      txHash,
+      signerId
+    });
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error || 'Failed to get signing data'
+      });
+    }
+
+    console.log('  ✅ Got signing data:', {
+      transactionHash: result.transactionHash,
+      initiatorHash: result.initiatorHash?.substring(0, 16) + '...',
+      signerVersion: result.signerVersion
+    });
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('Error getting signing data:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Internal server error'
+    });
+  }
+});
+
+/**
  * POST /api/v1/pending/:txHash/vote
  *
  * Submit a vote (signature) on a pending transaction.

@@ -11,6 +11,7 @@ let Transaction: any;
 let Envelope: any;
 let encode: any;  // For encoding signature metadata
 let sha256: any;  // For hashing
+let hashBody: any;  // For computing body hash (initiatorHash)
 
 import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
@@ -112,6 +113,11 @@ export class AccumulateService {
       // @ts-ignore: Module path determined at runtime
       const commonModule = await import(`${sdkUrl}/common/index.js`);
       sha256 = commonModule.sha256;
+
+      // Load hashBody from core/base for computing initiatorHash
+      // @ts-ignore: Module path determined at runtime
+      const baseModule = await import(`${sdkUrl}/core/base.js`);
+      hashBody = baseModule.hashBody;
 
       // Initialize Accumulate clients - Kermit testnet by default
       const endpointV3 = process.env.ACCUM_ENDPOINT || 'http://206.191.154.164/v3';
@@ -4530,6 +4536,105 @@ export class AccumulateService {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to query pending transactions'
+      };
+    }
+  }
+
+  /**
+   * Get signing data for a pending transaction.
+   * This returns the initiatorHash (body hash) needed for computing dataForSignature.
+   * The initiatorHash is used instead of transactionHash when signing pending transactions.
+   */
+  async getPendingTransactionSigningData(params: {
+    txHash: string;
+    signerId: string;
+  }): Promise<{
+    success: boolean;
+    transactionHash?: string;
+    initiatorHash?: string;
+    signerVersion?: number;
+    error?: string;
+  }> {
+    try {
+      const { txHash, signerId } = params;
+
+      this.logger.info('🔐 Getting signing data for pending transaction', {
+        txHash,
+        signerId
+      });
+
+      // Normalize txHash to proper transaction URL format for querying
+      let queryUrl = txHash.trim();
+      if (!queryUrl.toLowerCase().startsWith('acc://')) {
+        queryUrl = 'acc://' + queryUrl;
+      }
+
+      // Extract the hash part
+      const withoutPrefix = queryUrl.substring(6);
+      const hashPart = withoutPrefix.includes('@') ? withoutPrefix.split('@')[0] : withoutPrefix.split('/')[0];
+      const isHash = /^[a-fA-F0-9]{64}$/.test(hashPart);
+
+      // Construct query URL with signer
+      if (isHash && !queryUrl.includes('@')) {
+        let signerPath = signerId;
+        if (signerPath.toLowerCase().startsWith('acc://')) {
+          signerPath = signerPath.substring(6);
+        }
+        queryUrl = `acc://${hashPart}@${signerPath}`;
+      }
+
+      // Query the pending transaction
+      const txResult = await this.client.query(queryUrl);
+      if (!txResult) {
+        return { success: false, error: 'Pending transaction not found' };
+      }
+
+      // Extract the transaction
+      let rawTransaction = txResult.transaction;
+      if (!rawTransaction && txResult.message) {
+        rawTransaction = txResult.message.transaction || txResult.message;
+      }
+
+      if (!rawTransaction || !rawTransaction.body) {
+        return { success: false, error: 'Could not extract transaction body' };
+      }
+
+      // Compute the body hash (initiatorHash)
+      // This is what should be used in dataForSignature computation
+      const bodyHashBytes = hashBody(rawTransaction.body);
+      const initiatorHash = Buffer.from(bodyHashBytes).toString('hex');
+
+      this.logger.info('🔐 Computed initiatorHash for pending transaction', {
+        txHash: hashPart,
+        initiatorHash,
+        bodyType: rawTransaction.body?.type
+      });
+
+      // Get signer version from key page
+      let signerVersion = 1;
+      try {
+        const signerInfo = await this.client.query(signerId);
+        if (signerInfo?.version !== undefined) {
+          signerVersion = Number(signerInfo.version);
+        }
+      } catch (e) {
+        this.logger.warn('Could not query signer version, using default 1');
+      }
+
+      return {
+        success: true,
+        transactionHash: hashPart,
+        initiatorHash,
+        signerVersion
+      };
+
+    } catch (error) {
+      this.logger.error('❌ Failed to get signing data', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get signing data'
       };
     }
   }
