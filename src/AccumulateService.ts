@@ -4542,25 +4542,29 @@ export class AccumulateService {
 
   /**
    * Get signing data for a pending transaction.
-   * This returns the initiatorHash (body hash) needed for computing dataForSignature.
-   * The initiatorHash is used instead of transactionHash when signing pending transactions.
+   * This computes the complete dataForSignature that KeyVault should sign directly.
+   * Uses the SDK's encode function for proper metadata encoding.
    */
   async getPendingTransactionSigningData(params: {
     txHash: string;
     signerId: string;
+    timestamp?: number;  // Optional - if not provided, one will be generated
   }): Promise<{
     success: boolean;
     transactionHash?: string;
     initiatorHash?: string;
+    dataForSignature?: string;  // The complete hash to sign
     signerVersion?: number;
+    timestamp?: number;  // The timestamp used (return so KeyVault uses the same)
     error?: string;
   }> {
     try {
-      const { txHash, signerId } = params;
+      const { txHash, signerId, timestamp: providedTimestamp } = params;
 
       this.logger.info('🔐 Getting signing data for pending transaction', {
         txHash,
-        signerId
+        signerId,
+        hasProvidedTimestamp: !!providedTimestamp
       });
 
       // Normalize txHash to proper transaction URL format for querying
@@ -4600,15 +4604,8 @@ export class AccumulateService {
       }
 
       // Compute the body hash (initiatorHash)
-      // This is what should be used in dataForSignature computation
       const bodyHashBytes = hashBody(rawTransaction.body);
       const initiatorHash = Buffer.from(bodyHashBytes).toString('hex');
-
-      this.logger.info('🔐 Computed initiatorHash for pending transaction', {
-        txHash: hashPart,
-        initiatorHash,
-        bodyType: rawTransaction.body?.type
-      });
 
       // Get signer version from key page
       let signerVersion = 1;
@@ -4621,11 +4618,40 @@ export class AccumulateService {
         this.logger.warn('Could not query signer version, using default 1');
       }
 
+      // Generate or use provided timestamp (microseconds)
+      const timestamp = providedTimestamp || this.getNextTimestamp();
+
+      // Compute signature metadata hash using the SDK's encode function
+      // This ensures the encoding matches what Accumulate expects
+      const sigMdHash = sha256(encode({
+        url: signerId,
+        version: signerVersion,
+        timestamp: timestamp
+      }));
+
+      // Compute the complete dataForSignature: SHA256(initiatorHash + sigMdHash)
+      const dataForSignatureBytes = sha256(Buffer.concat([
+        Buffer.from(bodyHashBytes),
+        Buffer.from(sigMdHash)
+      ]));
+      const dataForSignature = Buffer.from(dataForSignatureBytes).toString('hex');
+
+      this.logger.info('🔐 Computed signing data for pending transaction', {
+        txHash: hashPart,
+        initiatorHash,
+        dataForSignature: dataForSignature.substring(0, 16) + '...',
+        signerVersion,
+        timestamp,
+        bodyType: rawTransaction.body?.type
+      });
+
       return {
         success: true,
         transactionHash: hashPart,
         initiatorHash,
-        signerVersion
+        dataForSignature,
+        signerVersion,
+        timestamp
       };
 
     } catch (error) {

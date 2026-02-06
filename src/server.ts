@@ -4189,15 +4189,18 @@ app.get('/api/v1/account/:url/pending', async (req, res) => {
  * GET /api/v1/pending/:txHash/signing-data
  *
  * Get signing data for a pending transaction.
- * Returns the initiatorHash (body hash) needed for computing dataForSignature.
+ * Computes the complete dataForSignature that KeyVault should sign directly.
  *
  * Query params:
  * - signerId: string (key page URL that will sign)
+ * - timestamp?: number (optional microseconds timestamp - if not provided, one is generated)
  *
  * Response:
  * - transactionHash: string (the full transaction hash)
- * - initiatorHash: string (body hash, used for dataForSignature computation)
+ * - initiatorHash: string (body hash)
+ * - dataForSignature: string (the complete hash to sign)
  * - signerVersion: number (key page version)
+ * - timestamp: number (the timestamp used - must be passed to KeyVault)
  */
 app.get('/api/v1/pending/:txHash/signing-data', async (req, res) => {
   console.log('\n🔐 GET /api/v1/pending/:txHash/signing-data');
@@ -4205,9 +4208,11 @@ app.get('/api/v1/pending/:txHash/signing-data', async (req, res) => {
   try {
     const txHash = decodeURIComponent(req.params.txHash);
     const signerId = req.query.signerId as string;
+    const timestamp = req.query.timestamp ? Number(req.query.timestamp) : undefined;
 
     console.log('  Transaction Hash:', txHash);
     console.log('  Signer ID:', signerId);
+    console.log('  Timestamp:', timestamp || 'will be generated');
 
     if (!signerId) {
       return res.status(400).json({
@@ -4218,7 +4223,8 @@ app.get('/api/v1/pending/:txHash/signing-data', async (req, res) => {
 
     const result = await accumulateService.getPendingTransactionSigningData({
       txHash,
-      signerId
+      signerId,
+      timestamp
     });
 
     if (!result.success) {
@@ -4231,7 +4237,9 @@ app.get('/api/v1/pending/:txHash/signing-data', async (req, res) => {
     console.log('  ✅ Got signing data:', {
       transactionHash: result.transactionHash,
       initiatorHash: result.initiatorHash?.substring(0, 16) + '...',
-      signerVersion: result.signerVersion
+      dataForSignature: result.dataForSignature?.substring(0, 16) + '...',
+      signerVersion: result.signerVersion,
+      timestamp: result.timestamp
     });
 
     res.json(result);
