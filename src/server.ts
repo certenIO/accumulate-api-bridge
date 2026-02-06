@@ -4210,11 +4210,13 @@ app.get('/api/v1/pending/:txHash/signing-data', async (req, res) => {
     const txHash = decodeURIComponent(req.params.txHash);
     const signerId = req.query.signerId as string;
     const publicKey = req.query.publicKey as string;
+    const vote = (req.query.vote as 'approve' | 'reject' | 'abstain') || 'approve';
     const timestamp = req.query.timestamp ? Number(req.query.timestamp) : undefined;
 
     console.log('  Transaction Hash:', txHash);
     console.log('  Signer ID:', signerId);
     console.log('  Public Key:', publicKey ? publicKey.substring(0, 16) + '...' : 'missing');
+    console.log('  Vote:', vote);
     console.log('  Timestamp:', timestamp || 'will be generated');
 
     if (!signerId) {
@@ -4235,6 +4237,7 @@ app.get('/api/v1/pending/:txHash/signing-data', async (req, res) => {
       txHash,
       signerId,
       publicKey,
+      vote,
       timestamp
     });
 

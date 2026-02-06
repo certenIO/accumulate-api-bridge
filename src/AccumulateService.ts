@@ -4554,11 +4554,13 @@ export class AccumulateService {
    * Uses the SDK's encode function for proper metadata encoding.
    *
    * IMPORTANT: publicKey is required because sigMdHash includes the public key.
+   * IMPORTANT: vote is required because sigMdHash includes the vote field.
    */
   async getPendingTransactionSigningData(params: {
     txHash: string;
     signerId: string;
     publicKey: string;   // Required - hex-encoded public key for sigMdHash computation
+    vote?: 'approve' | 'reject' | 'abstain';  // Vote type - defaults to 'approve'
     timestamp?: number;  // Optional - if not provided, one will be generated
   }): Promise<{
     success: boolean;
@@ -4570,15 +4572,21 @@ export class AccumulateService {
     error?: string;
   }> {
     try {
-      const { txHash, signerId, publicKey, timestamp: providedTimestamp } = params;
+      const { txHash, signerId, publicKey, vote = 'approve', timestamp: providedTimestamp } = params;
 
       if (!publicKey) {
         return { success: false, error: 'publicKey is required for signing data computation' };
       }
 
+      // Convert vote string to numeric code
+      // Vote codes: accept/approve = 0, reject = 1, abstain = 2
+      const voteCode = vote === 'approve' ? 0 : vote === 'reject' ? 1 : vote === 'abstain' ? 2 : 0;
+
       this.logger.info('🔐 Getting signing data for pending transaction', {
         txHash,
         signerId,
+        vote,
+        voteCode,
         hasProvidedTimestamp: !!providedTimestamp
       });
 
@@ -4641,13 +4649,14 @@ export class AccumulateService {
 
       // Create a properly typed ED25519Signature object for encoding
       // This ensures the encoding matches what Accumulate expects
-      // IMPORTANT: sigMdHash includes type, publicKey, signer, signerVersion, timestamp
+      // IMPORTANT: sigMdHash includes type, publicKey, signer, signerVersion, timestamp, AND vote
       const signerUrl = AccURL.parse(signerId);
       const signatureObj = new ED25519Signature({
         publicKey: publicKeyBytes,
         signer: signerUrl,
         signerVersion: signerVersion,
-        timestamp: timestamp
+        timestamp: timestamp,
+        vote: voteCode
       });
 
       // Compute signature metadata hash using the SDK's encode function
@@ -4666,6 +4675,7 @@ export class AccumulateService {
         dataForSignature: dataForSignature.substring(0, 16) + '...',
         signerVersion,
         timestamp,
+        vote: voteCode,
         bodyType: rawTransaction.body?.type
       });
 
