@@ -1,0 +1,291 @@
+/**
+ * EVM Chain Handler
+ *
+ * Handles account-address, deploy-account, and sponsor-status for all EVM chains.
+ * Refactored from inline logic in server.ts.
+ */
+
+import { ethers } from 'ethers';
+import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, ChainConfig } from './types.js';
+import { deriveEvmOwner, deriveSaltU256 } from './utils.js';
+
+// CertenAccountFactory ABI (minimal - only what we need)
+const ACCOUNT_FACTORY_ABI = [
+  {
+    inputs: [
+      { internalType: 'address', name: 'owner', type: 'address' },
+      { internalType: 'string', name: 'adiURL', type: 'string' },
+      { internalType: 'uint256', name: 'salt', type: 'uint256' }
+    ],
+    name: 'createAccountIfNotExists',
+    outputs: [
+      { internalType: 'address', name: 'account', type: 'address' }
+    ],
+    stateMutability: 'payable',
+    type: 'function'
+  },
+  {
+    inputs: [
+      { internalType: 'address', name: 'owner', type: 'address' },
+      { internalType: 'string', name: 'adiURL', type: 'string' },
+      { internalType: 'uint256', name: 'salt', type: 'uint256' }
+    ],
+    name: 'getAddress',
+    outputs: [
+      { internalType: 'address', name: 'accountAddress', type: 'address' }
+    ],
+    stateMutability: 'view',
+    type: 'function'
+  },
+  {
+    inputs: [
+      { internalType: 'address', name: 'account', type: 'address' }
+    ],
+    name: 'isDeployedAccount',
+    outputs: [
+      { internalType: 'bool', name: '', type: 'bool' }
+    ],
+    stateMutability: 'view',
+    type: 'function'
+  },
+  {
+    inputs: [],
+    name: 'deploymentFee',
+    outputs: [
+      { internalType: 'uint256', name: '', type: 'uint256' }
+    ],
+    stateMutability: 'view',
+    type: 'function'
+  }
+];
+
+export class EvmChainHandler implements ChainHandler {
+  readonly chainIds: string[];
+  readonly chainName: string;
+  private config: ChainConfig;
+
+  constructor(config: ChainConfig, extraIds: string[] = []) {
+    this.config = config;
+    this.chainName = config.name;
+    this.chainIds = [config.chainId, ...extraIds];
+  }
+
+  isSponsorConfigured(): boolean {
+    return process.env.EVM_SPONSORED_DEPLOYMENT_ENABLED === 'true' &&
+      !!process.env.EVM_SPONSOR_PRIVATE_KEY;
+  }
+
+  async getAccountAddress(adiUrl: string): Promise<AccountAddressResult> {
+    const ownerAddress = deriveEvmOwner(adiUrl);
+    const salt = deriveSaltU256(adiUrl);
+
+    const provider = new ethers.JsonRpcProvider(this.config.rpcUrl);
+    const factory = new ethers.Contract(
+      this.config.factoryAddress,
+      ACCOUNT_FACTORY_ABI,
+      provider
+    ) as any;
+
+    const getAddressFn = factory.getFunction('getAddress');
+    const predictedAddress: string = await getAddressFn(ownerAddress, adiUrl, salt);
+
+    // Moonbeam fix: validate that factory didn't return zero/empty address
+    if (!predictedAddress || predictedAddress === '0x0000000000000000000000000000000000000000') {
+      throw new Error(`Factory on ${this.chainName} returned invalid address. The contract may not be properly deployed or may be incompatible.`);
+    }
+
+    const isDeployed: boolean = await factory.isDeployedAccount(predictedAddress);
+
+    return {
+      accountAddress: predictedAddress,
+      isDeployed,
+      explorerUrl: `${this.config.explorerUrl}/address/${predictedAddress}`
+    };
+  }
+
+  async deployAccount(adiUrl: string): Promise<DeployAccountResult> {
+    if (!this.isSponsorConfigured()) {
+      throw new Error('Sponsored deployment is not configured for EVM chains');
+    }
+
+    const ownerAddress = deriveEvmOwner(adiUrl);
+    const salt = deriveSaltU256(adiUrl);
+
+    const sponsorPrivateKey = process.env.EVM_SPONSOR_PRIVATE_KEY!;
+    const provider = new ethers.JsonRpcProvider(this.config.rpcUrl);
+    const sponsorWallet = new ethers.Wallet(sponsorPrivateKey, provider);
+
+    // Check sponsor balance
+    const sponsorBalance = await provider.getBalance(sponsorWallet.address);
+    const minBalance = ethers.parseEther(process.env.EVM_SPONSOR_MIN_BALANCE || '0.01');
+    console.log(`  Sponsor balance: ${ethers.formatEther(sponsorBalance)} ETH`);
+
+    if (sponsorBalance < minBalance) {
+      throw new Error('Sponsor wallet balance too low. Please contact support.');
+    }
+
+    const factory = new ethers.Contract(
+      this.config.factoryAddress,
+      ACCOUNT_FACTORY_ABI,
+      sponsorWallet
+    ) as any;
+
+    // Check if account already exists
+    const getAddressFn = factory.getFunction('getAddress');
+    const predictedAddress: string = await getAddressFn(ownerAddress, adiUrl, salt);
+
+    // Moonbeam fix: validate address
+    if (!predictedAddress || predictedAddress === '0x0000000000000000000000000000000000000000') {
+      throw new Error(`Factory on ${this.chainName} returned invalid address. The contract may not be properly deployed or may be incompatible.`);
+    }
+
+    const alreadyDeployed: boolean = await factory.isDeployedAccount(predictedAddress);
+
+    if (alreadyDeployed) {
+      return {
+        accountAddress: predictedAddress,
+        alreadyExisted: true,
+        transactionHash: null,
+        explorerUrl: `${this.config.explorerUrl}/address/${predictedAddress}`,
+        message: 'Certen Abstract Account already exists at this address'
+      };
+    }
+
+    // Deploy the account
+    console.log(`  Deploying on ${this.chainName}...`);
+    const deploymentFee = await factory.deploymentFee();
+    console.log(`  Deployment fee: ${ethers.formatEther(deploymentFee)} ETH`);
+
+    const tx = await factory.createAccountIfNotExists(ownerAddress, adiUrl, salt, { value: deploymentFee });
+    console.log(`  Transaction sent: ${tx.hash}`);
+
+    const receipt = await tx.wait();
+
+    if (receipt.status !== 1) {
+      throw new Error(`Transaction failed on ${this.chainName}`);
+    }
+
+    // Parse the AccountDeployed event
+    let deployedAddress = predictedAddress;
+    const accountDeployedTopic = '0xf92d8f64e097b6044b318e7dc56258b83e25d40b31866b4af076cf98ae167dee';
+    for (const log of receipt.logs) {
+      if (log.topics && log.topics[0] === accountDeployedTopic && log.topics[1]) {
+        deployedAddress = '0x' + log.topics[1].slice(-40);
+        break;
+      }
+    }
+
+    return {
+      accountAddress: deployedAddress,
+      alreadyExisted: false,
+      transactionHash: tx.hash,
+      explorerUrl: `${this.config.explorerUrl}/tx/${tx.hash}`,
+      gasUsed: receipt.gasUsed.toString(),
+      message: 'Certen Abstract Account deployed successfully'
+    };
+  }
+
+  async getSponsorStatus(): Promise<SponsorStatusResult> {
+    const sponsorAddress = process.env.EVM_SPONSOR_ADDRESS;
+    if (!this.isSponsorConfigured() || !sponsorAddress) {
+      return {
+        name: this.chainName,
+        available: false,
+        factoryAddress: this.config.factoryAddress,
+        error: 'Sponsor not configured'
+      };
+    }
+
+    try {
+      const provider = new ethers.JsonRpcProvider(this.config.rpcUrl);
+      const balance = await provider.getBalance(sponsorAddress);
+      const minBalance = ethers.parseEther(process.env.EVM_SPONSOR_MIN_BALANCE || '0.01');
+
+      return {
+        name: this.chainName,
+        available: balance >= minBalance,
+        factoryAddress: this.config.factoryAddress,
+        balance: ethers.formatEther(balance),
+        minBalance: ethers.formatEther(minBalance)
+      };
+    } catch (err) {
+      return {
+        name: this.chainName,
+        available: false,
+        factoryAddress: this.config.factoryAddress,
+        error: 'Failed to connect to chain'
+      };
+    }
+  }
+}
+
+// ---- EVM chain configurations ----
+
+const SEPOLIA_CONFIG: ChainConfig = {
+  chainId: 'sepolia',
+  name: 'Ethereum Sepolia',
+  rpcUrl: process.env.EVM_SEPOLIA_RPC_URL || 'https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  factoryAddress: process.env.EVM_SEPOLIA_ACCOUNT_FACTORY || '0xc0e54d4D1A5B25e4Cc719Bec436c44241F2BA5d9',
+  explorerUrl: 'https://sepolia.etherscan.io'
+};
+
+const ARBITRUM_SEPOLIA_CONFIG: ChainConfig = {
+  chainId: 'arbitrum-sepolia',
+  name: 'Arbitrum Sepolia',
+  rpcUrl: process.env.EVM_ARBITRUM_SEPOLIA_RPC_URL || 'https://arbitrum-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  factoryAddress: process.env.EVM_ARBITRUM_SEPOLIA_ACCOUNT_FACTORY || '0x842271e696EFC9EC05161FAfBB611ccFC37F5cfa',
+  explorerUrl: 'https://sepolia.arbiscan.io'
+};
+
+const BASE_SEPOLIA_CONFIG: ChainConfig = {
+  chainId: 'base-sepolia',
+  name: 'Base Sepolia',
+  rpcUrl: process.env.EVM_BASE_SEPOLIA_RPC_URL || 'https://base-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  factoryAddress: process.env.EVM_BASE_SEPOLIA_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',
+  explorerUrl: 'https://sepolia-explorer.base.org'
+};
+
+const BSC_TESTNET_CONFIG: ChainConfig = {
+  chainId: 'bsc-testnet',
+  name: 'BSC Testnet',
+  rpcUrl: process.env.EVM_BSC_TESTNET_RPC_URL || 'https://data-seed-prebsc-1-s1.binance.org:8545',
+  factoryAddress: process.env.EVM_BSC_TESTNET_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',
+  explorerUrl: 'https://testnet.bscscan.com'
+};
+
+const OPTIMISM_SEPOLIA_CONFIG: ChainConfig = {
+  chainId: 'optimism-sepolia',
+  name: 'Optimism Sepolia',
+  rpcUrl: process.env.EVM_OPTIMISM_SEPOLIA_RPC_URL || 'https://optimism-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  factoryAddress: process.env.EVM_OPTIMISM_SEPOLIA_ACCOUNT_FACTORY || '0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3',
+  explorerUrl: 'https://sepolia-optimistic.etherscan.io'
+};
+
+const POLYGON_AMOY_CONFIG: ChainConfig = {
+  chainId: 'polygon-amoy',
+  name: 'Polygon Amoy',
+  rpcUrl: process.env.EVM_POLYGON_AMOY_RPC_URL || 'https://rpc-amoy.polygon.technology',
+  factoryAddress: process.env.EVM_POLYGON_AMOY_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',
+  explorerUrl: 'https://amoy.polygonscan.com'
+};
+
+const MOONBASE_ALPHA_CONFIG: ChainConfig = {
+  chainId: 'moonbase-alpha',
+  name: 'Moonbeam Moonbase Alpha',
+  rpcUrl: process.env.EVM_MOONBASE_ALPHA_RPC_URL || 'https://rpc.api.moonbase.moonbeam.network',
+  factoryAddress: process.env.EVM_MOONBASE_ALPHA_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',
+  explorerUrl: 'https://moonbase.moonscan.io'
+};
+
+/** Create all EVM chain handlers */
+export function createEvmHandlers(): EvmChainHandler[] {
+  return [
+    new EvmChainHandler(SEPOLIA_CONFIG, ['11155111']),
+    new EvmChainHandler(ARBITRUM_SEPOLIA_CONFIG, ['421614']),
+    new EvmChainHandler(BASE_SEPOLIA_CONFIG, ['84532']),
+    new EvmChainHandler(BSC_TESTNET_CONFIG, ['97']),
+    new EvmChainHandler(OPTIMISM_SEPOLIA_CONFIG, ['11155420']),
+    new EvmChainHandler(POLYGON_AMOY_CONFIG, ['80002']),
+    new EvmChainHandler(MOONBASE_ALPHA_CONFIG, ['1287']),
+  ];
+}
