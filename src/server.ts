@@ -15,6 +15,7 @@ import { ethers } from 'ethers';
 import { AccumulateService } from './AccumulateService.js';
 import { AdiStorageService } from './AdiStorageService.js';
 import { CertenIntentService, CreateIntentRequest, CreateMultiLegIntentRequest, IntentLeg, ExecutionMode } from './CertenIntentService.js';
+import { getChainHandler, getAllChainHandlers, getRegisteredChainIds } from './chains/index.js';
 
 // Load environment variables first
 dotenv.config();
@@ -3467,158 +3468,22 @@ app.post('/api/v1/chain/verify-address', async (req, res) => {
 });
 
 // =============================================================================
-// EVM SPONSORED ACCOUNT DEPLOYMENT
+// MULTI-CHAIN SPONSORED ACCOUNT DEPLOYMENT
 // =============================================================================
-
-// CertenAccountFactory ABI (minimal - only what we need)
-const ACCOUNT_FACTORY_ABI = [
-  {
-    inputs: [
-      { internalType: 'address', name: 'owner', type: 'address' },
-      { internalType: 'string', name: 'adiURL', type: 'string' },
-      { internalType: 'uint256', name: 'salt', type: 'uint256' }
-    ],
-    name: 'createAccountIfNotExists',
-    outputs: [
-      { internalType: 'address', name: 'account', type: 'address' }
-    ],
-    stateMutability: 'payable',
-    type: 'function'
-  },
-  {
-    inputs: [
-      { internalType: 'address', name: 'owner', type: 'address' },
-      { internalType: 'string', name: 'adiURL', type: 'string' },
-      { internalType: 'uint256', name: 'salt', type: 'uint256' }
-    ],
-    name: 'getAddress',
-    outputs: [
-      { internalType: 'address', name: 'accountAddress', type: 'address' }
-    ],
-    stateMutability: 'view',
-    type: 'function'
-  },
-  {
-    inputs: [
-      { internalType: 'address', name: 'account', type: 'address' }
-    ],
-    name: 'isDeployedAccount',
-    outputs: [
-      { internalType: 'bool', name: '', type: 'bool' }
-    ],
-    stateMutability: 'view',
-    type: 'function'
-  },
-  {
-    inputs: [],
-    name: 'deploymentFee',
-    outputs: [
-      { internalType: 'uint256', name: '', type: 'uint256' }
-    ],
-    stateMutability: 'view',
-    type: 'function'
-  }
-];
-
-// Chain configuration for EVM networks
-// Supports both chain names (e.g., "sepolia") and numeric chain IDs (e.g., "11155111")
-// Factory addresses from certen-web-app/src/config/contracts.ts
-
-const SEPOLIA_CONFIG = {
-  rpcUrl: process.env.EVM_SEPOLIA_RPC_URL || 'https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_SEPOLIA_ACCOUNT_FACTORY || '0xc0e54d4D1A5B25e4Cc719Bec436c44241F2BA5d9',
-  explorerUrl: 'https://sepolia.etherscan.io',
-  name: 'Ethereum Sepolia'
-};
-
-const ARBITRUM_SEPOLIA_CONFIG = {
-  rpcUrl: process.env.EVM_ARBITRUM_SEPOLIA_RPC_URL || 'https://arbitrum-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_ARBITRUM_SEPOLIA_ACCOUNT_FACTORY || '0x842271e696EFC9EC05161FAfBB611ccFC37F5cfa',  // V4 Factory (2026-02-04)
-  explorerUrl: 'https://sepolia.arbiscan.io',
-  name: 'Arbitrum Sepolia'
-};
-
-const BASE_SEPOLIA_CONFIG = {
-  rpcUrl: process.env.EVM_BASE_SEPOLIA_RPC_URL || 'https://base-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_BASE_SEPOLIA_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',  // V4 Factory (2026-02-08)
-  explorerUrl: 'https://sepolia-explorer.base.org',
-  name: 'Base Sepolia'
-};
-
-const BSC_TESTNET_CONFIG = {
-  rpcUrl: process.env.EVM_BSC_TESTNET_RPC_URL || 'https://data-seed-prebsc-1-s1.binance.org:8545',
-  factoryAddress: process.env.EVM_BSC_TESTNET_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',  // V4 Factory (2026-02-08)
-  explorerUrl: 'https://testnet.bscscan.com',
-  name: 'BSC Testnet'
-};
-
-const OPTIMISM_SEPOLIA_CONFIG = {
-  rpcUrl: process.env.EVM_OPTIMISM_SEPOLIA_RPC_URL || 'https://optimism-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_OPTIMISM_SEPOLIA_ACCOUNT_FACTORY || '0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3',  // V4 Factory (2026-02-04)
-  explorerUrl: 'https://sepolia-optimistic.etherscan.io',
-  name: 'Optimism Sepolia'
-};
-
-const POLYGON_AMOY_CONFIG = {
-  rpcUrl: process.env.EVM_POLYGON_AMOY_RPC_URL || 'https://rpc-amoy.polygon.technology',
-  factoryAddress: process.env.EVM_POLYGON_AMOY_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',  // V4 Factory (2026-02-08)
-  explorerUrl: 'https://amoy.polygonscan.com',
-  name: 'Polygon Amoy'
-};
-
-const MOONBASE_ALPHA_CONFIG = {
-  rpcUrl: process.env.EVM_MOONBASE_ALPHA_RPC_URL || 'https://rpc.api.moonbase.moonbeam.network',
-  factoryAddress: process.env.EVM_MOONBASE_ALPHA_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',  // V4 Factory (2026-02-08)
-  explorerUrl: 'https://moonbase.moonscan.io',
-  name: 'Moonbeam Moonbase Alpha'
-};
-
-const EVM_CHAIN_CONFIG: Record<string, { rpcUrl: string; factoryAddress: string; explorerUrl: string; name: string }> = {
-  // Ethereum Sepolia - by name and chain ID
-  'sepolia': SEPOLIA_CONFIG,
-  '11155111': SEPOLIA_CONFIG,
-
-  // Arbitrum Sepolia
-  'arbitrum-sepolia': ARBITRUM_SEPOLIA_CONFIG,
-  '421614': ARBITRUM_SEPOLIA_CONFIG,
-
-  // Base Sepolia
-  'base-sepolia': BASE_SEPOLIA_CONFIG,
-  '84532': BASE_SEPOLIA_CONFIG,
-
-  // BSC Testnet
-  'bsc-testnet': BSC_TESTNET_CONFIG,
-  '97': BSC_TESTNET_CONFIG,
-
-  // Optimism Sepolia
-  'optimism-sepolia': OPTIMISM_SEPOLIA_CONFIG,
-  '11155420': OPTIMISM_SEPOLIA_CONFIG,
-
-  // Polygon Amoy
-  'polygon-amoy': POLYGON_AMOY_CONFIG,
-  '80002': POLYGON_AMOY_CONFIG,
-
-  // Moonbeam Moonbase Alpha
-  'moonbase-alpha': MOONBASE_ALPHA_CONFIG,
-  '1287': MOONBASE_ALPHA_CONFIG,
-};
+// Chain handlers are registered in ./chains/index.ts (EVM + non-EVM)
+// Supported: Sepolia, Arbitrum, Base, BSC, Optimism, Polygon, Moonbeam,
+//            Solana, Aptos, Sui, NEAR, TON, TRON
 
 /**
  * POST /api/v1/chain/deploy-account
  *
- * Deploys a Certen Abstract Account for an ADI on an EVM chain.
+ * Deploys a Certen Abstract Account for an ADI on any supported chain.
  * The abstract account address is deterministically derived from the ADI URL.
  * Gas fees are sponsored by Certen - users don't need tokens or keys on target chains.
  *
- * This is the core of Certen's cross-chain identity:
- * - User has ONE identity (their Accumulate ADI)
- * - User has ONE set of keys (managed in Key Vault)
- * - Abstract accounts on EVM chains are controlled by ADI governance
- * - NO separate EOA or keys needed per chain
- *
  * Request body:
  * - adiUrl: The Accumulate ADI URL (acc://...)
- * - chainId: The target blockchain (e.g., "sepolia", "11155111")
+ * - chainId: The target blockchain (e.g., "sepolia", "solana-devnet", "aptos-testnet")
  */
 app.post('/api/v1/chain/deploy-account', async (req, res) => {
   console.log('\n📦 POST /api/v1/chain/deploy-account');
@@ -3626,7 +3491,6 @@ app.post('/api/v1/chain/deploy-account', async (req, res) => {
   try {
     const { adiUrl, chainId } = req.body;
 
-    // Validate required fields
     if (!adiUrl || !chainId) {
       return res.status(400).json({
         success: false,
@@ -3634,7 +3498,6 @@ app.post('/api/v1/chain/deploy-account', async (req, res) => {
       });
     }
 
-    // Validate ADI URL format
     if (!adiUrl.startsWith('acc://')) {
       return res.status(400).json({
         success: false,
@@ -3642,140 +3505,29 @@ app.post('/api/v1/chain/deploy-account', async (req, res) => {
       });
     }
 
-    // Check if sponsored deployment is enabled
-    if (process.env.EVM_SPONSORED_DEPLOYMENT_ENABLED !== 'true') {
-      return res.status(503).json({
-        success: false,
-        error: 'Sponsored deployment is currently disabled'
-      });
-    }
-
-    // Check if we support this chain
-    const chainConfig = EVM_CHAIN_CONFIG[chainId.toLowerCase()] || EVM_CHAIN_CONFIG[chainId];
-    if (!chainConfig) {
+    const handler = getChainHandler(chainId);
+    if (!handler) {
       return res.status(400).json({
         success: false,
-        error: `Unsupported chain: ${chainId}. Supported chains: ${Object.keys(EVM_CHAIN_CONFIG).join(', ')}`
+        error: `Unsupported chain: ${chainId}. Supported chains: ${getRegisteredChainIds().join(', ')}`
       });
     }
 
-    console.log(`  Chain: ${chainConfig.name} (${chainId})`);
+    if (!handler.isSponsorConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: `Sponsored deployment is not configured for ${handler.chainName}`
+      });
+    }
+
+    console.log(`  Chain: ${handler.chainName} (${chainId})`);
     console.log(`  ADI: ${adiUrl}`);
 
-    // Derive deterministic "owner" address from ADI URL
-    // This ensures the same ADI always gets the same abstract account address
-    const adiHash = ethers.keccak256(ethers.toUtf8Bytes(adiUrl));
-    const ownerAddress = ethers.getAddress('0x' + adiHash.slice(-40));
-    console.log(`  Derived owner: ${ownerAddress}`);
-
-    // Get sponsor wallet
-    const sponsorPrivateKey = process.env.EVM_SPONSOR_PRIVATE_KEY;
-    if (!sponsorPrivateKey) {
-      console.error('  ❌ Sponsor wallet not configured');
-      return res.status(503).json({
-        success: false,
-        error: 'Sponsor wallet not configured'
-      });
-    }
-
-    // Connect to the chain
-    console.log(`  Connecting to ${chainConfig.name}...`);
-    const provider = new ethers.JsonRpcProvider(chainConfig.rpcUrl);
-    const sponsorWallet = new ethers.Wallet(sponsorPrivateKey, provider);
-
-    // Check sponsor balance
-    const sponsorBalance = await provider.getBalance(sponsorWallet.address);
-    const minBalance = ethers.parseEther(process.env.EVM_SPONSOR_MIN_BALANCE || '0.01');
-    console.log(`  Sponsor balance: ${ethers.formatEther(sponsorBalance)} ETH`);
-
-    if (sponsorBalance < minBalance) {
-      console.error('  ❌ Sponsor wallet balance too low');
-      return res.status(503).json({
-        success: false,
-        error: 'Sponsor wallet balance too low. Please contact support.'
-      });
-    }
-
-    // Create contract instance (use any to bypass TypeScript strict checking on contract methods)
-    const factory = new ethers.Contract(
-      chainConfig.factoryAddress,
-      ACCOUNT_FACTORY_ABI,
-      sponsorWallet
-    ) as any;
-
-    // Calculate the deterministic address first
-    // Use a salt derived from the ADI URL for deterministic addresses
-    const salt = BigInt(ethers.keccak256(ethers.toUtf8Bytes(adiUrl)));
-
-    // Check if account already exists
-    // NOTE: Use getFunction() because ethers v6 has a built-in getAddress() method on Contract
-    const getAddressFn = factory.getFunction('getAddress');
-    const predictedAddress: string = await getAddressFn(ownerAddress, adiUrl, salt);
-    const alreadyDeployed: boolean = await factory.isDeployedAccount(predictedAddress);
-
-    if (alreadyDeployed) {
-      console.log(`  ℹ️ Account already deployed at ${predictedAddress}`);
-      return res.json({
-        success: true,
-        accountAddress: predictedAddress,
-        alreadyExisted: true,
-        transactionHash: null,
-        explorerUrl: `${chainConfig.explorerUrl}/address/${predictedAddress}`,
-        message: 'Certen Abstract Account already exists at this address'
-      });
-    }
-
-    // Deploy the account
-    console.log('  Deploying Certen Abstract Account...');
-    console.log(`  Predicted address: ${predictedAddress}`);
-
-    // Factory requires a deployment fee of 0.001 ETH
-    const deploymentFee = await factory.deploymentFee();
-    console.log(`  Deployment fee: ${ethers.formatEther(deploymentFee)} ETH`);
-
-    const tx = await factory.createAccountIfNotExists(ownerAddress, adiUrl, salt, { value: deploymentFee });
-    console.log(`  Transaction sent: ${tx.hash}`);
-
-    // Wait for confirmation
-    console.log('  Waiting for confirmation...');
-    const receipt = await tx.wait();
-
-    if (receipt.status !== 1) {
-      console.error('  ❌ Transaction failed');
-      return res.status(500).json({
-        success: false,
-        error: 'Transaction failed',
-        transactionHash: tx.hash
-      });
-    }
-
-    // Parse the AccountDeployed event to get the actual deployed address
-    // Event signature: AccountDeployed(address indexed account, address indexed owner, ...)
-    // The account address is in topics[1]
-    let deployedAddress = predictedAddress; // Fallback
-    const accountDeployedTopic = '0xf92d8f64e097b6044b318e7dc56258b83e25d40b31866b4af076cf98ae167dee';
-
-    for (const log of receipt.logs) {
-      if (log.topics && log.topics[0] === accountDeployedTopic && log.topics[1]) {
-        // Extract address from topic (remove padding)
-        deployedAddress = '0x' + log.topics[1].slice(-40);
-        console.log(`  📍 Parsed deployed address from event: ${deployedAddress}`);
-        break;
-      }
-    }
-
-    console.log(`  ✅ Account deployed successfully!`);
-    console.log(`  Account address: ${deployedAddress}`);
-    console.log(`  Gas used: ${receipt.gasUsed.toString()}`);
+    const result = await handler.deployAccount(adiUrl);
 
     res.json({
       success: true,
-      accountAddress: deployedAddress,
-      alreadyExisted: false,
-      transactionHash: tx.hash,
-      explorerUrl: `${chainConfig.explorerUrl}/tx/${tx.hash}`,
-      gasUsed: receipt.gasUsed.toString(),
-      message: 'Certen Abstract Account deployed successfully'
+      ...result
     });
 
   } catch (error) {
@@ -3790,12 +3542,12 @@ app.post('/api/v1/chain/deploy-account', async (req, res) => {
 /**
  * GET /api/v1/chain/account-address
  *
- * Returns the predicted abstract account address for an ADI on a chain.
+ * Returns the predicted abstract account address for an ADI on any supported chain.
  * This allows the UI to show the user their address before deployment.
  *
  * Query params:
  * - adiUrl: The Accumulate ADI URL (acc://...)
- * - chainId: The target blockchain (e.g., "sepolia")
+ * - chainId: The target blockchain (e.g., "sepolia", "solana-devnet")
  */
 app.get('/api/v1/chain/account-address', async (req, res) => {
   console.log('\n🔍 GET /api/v1/chain/account-address');
@@ -3813,7 +3565,6 @@ app.get('/api/v1/chain/account-address', async (req, res) => {
     const adiUrlStr = adiUrl as string;
     const chainIdStr = chainId as string;
 
-    // Validate ADI URL format
     if (!adiUrlStr.startsWith('acc://')) {
       return res.status(400).json({
         success: false,
@@ -3821,51 +3572,27 @@ app.get('/api/v1/chain/account-address', async (req, res) => {
       });
     }
 
-    // Check if we support this chain
-    const chainConfig = EVM_CHAIN_CONFIG[chainIdStr.toLowerCase()] || EVM_CHAIN_CONFIG[chainIdStr];
-    if (!chainConfig) {
+    const handler = getChainHandler(chainIdStr);
+    if (!handler) {
       return res.status(400).json({
         success: false,
-        error: `Unsupported chain: ${chainIdStr}. Supported chains: ${Object.keys(EVM_CHAIN_CONFIG).join(', ')}`
+        error: `Unsupported chain: ${chainIdStr}. Supported chains: ${getRegisteredChainIds().join(', ')}`
       });
     }
 
-    // Derive deterministic "owner" address from ADI URL
-    const adiHash = ethers.keccak256(ethers.toUtf8Bytes(adiUrlStr));
-    const ownerAddress = ethers.getAddress('0x' + adiHash.slice(-40));
-
-    // Connect to chain and get predicted address from factory
-    const provider = new ethers.JsonRpcProvider(chainConfig.rpcUrl);
-    const factory = new ethers.Contract(
-      chainConfig.factoryAddress,
-      ACCOUNT_FACTORY_ABI,
-      provider
-    ) as any;
-
-    // Salt derived from ADI URL for deterministic addresses
-    const salt = BigInt(ethers.keccak256(ethers.toUtf8Bytes(adiUrlStr)));
-
-    // Get predicted address
-    // NOTE: Use getFunction() because ethers v6 has a built-in getAddress() method on Contract
-    const getAddressFn = factory.getFunction('getAddress');
-    const predictedAddress: string = await getAddressFn(ownerAddress, adiUrlStr, salt);
-
-    // Check if already deployed
-    const isDeployed: boolean = await factory.isDeployedAccount(predictedAddress);
+    const result = await handler.getAccountAddress(adiUrlStr);
 
     console.log(`  ADI: ${adiUrlStr}`);
-    console.log(`  Chain: ${chainConfig.name}`);
-    console.log(`  Address: ${predictedAddress}`);
-    console.log(`  Deployed: ${isDeployed}`);
+    console.log(`  Chain: ${handler.chainName}`);
+    console.log(`  Address: ${result.accountAddress}`);
+    console.log(`  Deployed: ${result.isDeployed}`);
 
     res.json({
       success: true,
       adiUrl: adiUrlStr,
       chainId: chainIdStr,
-      chainName: chainConfig.name,
-      accountAddress: predictedAddress,
-      isDeployed,
-      explorerUrl: `${chainConfig.explorerUrl}/address/${predictedAddress}`
+      chainName: handler.chainName,
+      ...result
     });
 
   } catch (error) {
@@ -3880,55 +3607,32 @@ app.get('/api/v1/chain/account-address', async (req, res) => {
 /**
  * GET /api/v1/chain/sponsor-status
  *
- * Returns the status of the sponsor wallet for EVM chains.
+ * Returns the status of sponsor wallets across all supported chains.
  * Useful for checking if sponsored deployments are available.
  */
 app.get('/api/v1/chain/sponsor-status', async (req, res) => {
   console.log('\n📊 GET /api/v1/chain/sponsor-status');
 
   try {
-    const enabled = process.env.EVM_SPONSORED_DEPLOYMENT_ENABLED === 'true';
-    const sponsorAddress = process.env.EVM_SPONSOR_ADDRESS;
-
-    if (!enabled || !sponsorAddress) {
-      return res.json({
-        success: true,
-        enabled: false,
-        message: 'Sponsored deployment is disabled'
-      });
-    }
-
-    // Get balances for each supported chain
+    const allHandlers = getAllChainHandlers();
     const chainStatuses: Record<string, any> = {};
 
-    for (const [chainId, config] of Object.entries(EVM_CHAIN_CONFIG)) {
-      try {
-        const provider = new ethers.JsonRpcProvider(config.rpcUrl);
-        const balance = await provider.getBalance(sponsorAddress);
-        const minBalance = ethers.parseEther(process.env.EVM_SPONSOR_MIN_BALANCE || '0.01');
+    // Query all handlers in parallel
+    const statusPromises = allHandlers.map(async (handler) => {
+      const status = await handler.getSponsorStatus();
+      // Register under the first chain ID (canonical name)
+      chainStatuses[handler.chainIds[0]] = status;
+    });
 
-        chainStatuses[chainId] = {
-          name: config.name,
-          balance: ethers.formatEther(balance),
-          minBalance: ethers.formatEther(minBalance),
-          available: balance >= minBalance,
-          factoryAddress: config.factoryAddress
-        };
-      } catch (chainError) {
-        chainStatuses[chainId] = {
-          name: config.name,
-          error: 'Failed to connect to chain',
-          available: false
-        };
-      }
-    }
+    await Promise.allSettled(statusPromises);
+
+    const anyEnabled = allHandlers.some(h => h.isSponsorConfigured());
 
     res.json({
       success: true,
-      enabled: true,
-      sponsorAddress,
+      enabled: anyEnabled,
       chains: chainStatuses,
-      supportedChains: Object.keys(EVM_CHAIN_CONFIG)
+      supportedChains: getRegisteredChainIds()
     });
 
   } catch (error) {
