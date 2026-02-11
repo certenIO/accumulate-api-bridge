@@ -3540,14 +3540,14 @@ const ARBITRUM_SEPOLIA_CONFIG = {
 
 const BASE_SEPOLIA_CONFIG = {
   rpcUrl: process.env.EVM_BASE_SEPOLIA_RPC_URL || 'https://base-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_BASE_SEPOLIA_ACCOUNT_FACTORY || '0xc9489206a9c8fa12129fa1efee8ccb47ed93896d',
+  factoryAddress: process.env.EVM_BASE_SEPOLIA_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',  // V4 Factory (2026-02-08)
   explorerUrl: 'https://sepolia-explorer.base.org',
   name: 'Base Sepolia'
 };
 
 const BSC_TESTNET_CONFIG = {
   rpcUrl: process.env.EVM_BSC_TESTNET_RPC_URL || 'https://data-seed-prebsc-1-s1.binance.org:8545',
-  factoryAddress: process.env.EVM_BSC_TESTNET_ACCOUNT_FACTORY || '0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d',
+  factoryAddress: process.env.EVM_BSC_TESTNET_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',  // V4 Factory (2026-02-08)
   explorerUrl: 'https://testnet.bscscan.com',
   name: 'BSC Testnet'
 };
@@ -3561,14 +3561,14 @@ const OPTIMISM_SEPOLIA_CONFIG = {
 
 const POLYGON_AMOY_CONFIG = {
   rpcUrl: process.env.EVM_POLYGON_AMOY_RPC_URL || 'https://rpc-amoy.polygon.technology',
-  factoryAddress: process.env.EVM_POLYGON_AMOY_ACCOUNT_FACTORY || '0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d',
+  factoryAddress: process.env.EVM_POLYGON_AMOY_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',  // V4 Factory (2026-02-08)
   explorerUrl: 'https://amoy.polygonscan.com',
   name: 'Polygon Amoy'
 };
 
 const MOONBASE_ALPHA_CONFIG = {
   rpcUrl: process.env.EVM_MOONBASE_ALPHA_RPC_URL || 'https://rpc.api.moonbase.moonbeam.network',
-  factoryAddress: process.env.EVM_MOONBASE_ALPHA_ACCOUNT_FACTORY || '0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d',
+  factoryAddress: process.env.EVM_MOONBASE_ALPHA_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',  // V4 Factory (2026-02-08)
   explorerUrl: 'https://moonbase.moonscan.io',
   name: 'Moonbeam Moonbase Alpha'
 };
