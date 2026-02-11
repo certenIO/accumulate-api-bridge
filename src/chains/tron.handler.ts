@@ -3,72 +3,28 @@
  *
  * Uses the same Solidity ABI as EVM chains since TRON is EVM-compatible.
  * Key difference: addresses are Base58Check encoded (T...) instead of hex.
+ *
+ * Uses triggerConstantContract/triggerSmartContract directly instead of
+ * the tronWeb.contract() wrapper, which has address encoding issues in newer versions.
  */
 
 import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
 import { deriveEvmOwner, deriveSaltU256 } from './utils.js';
 
-// TronWeb is a CommonJS module; handle ESM import
-let TronWebModule: any = null;
+// TronWeb is a CommonJS module; resolve the actual constructor from ESM import
+let TronWebConstructor: any = null;
 async function getTronWeb(): Promise<any> {
-  if (!TronWebModule) {
-    try {
-      // Try ESM import first
-      const mod = await import('tronweb');
-      TronWebModule = mod.default || mod;
-    } catch {
-      // Fallback to createRequire for CommonJS
-      const { createRequire } = await import('module');
-      const require = createRequire(import.meta.url);
-      TronWebModule = require('tronweb');
-    }
+  if (!TronWebConstructor) {
+    const mod = await import('tronweb');
+    // The constructor lives at mod.TronWeb (named export), not mod.default
+    TronWebConstructor = mod.TronWeb || mod.default?.TronWeb || mod.default;
   }
-  return TronWebModule;
+  return TronWebConstructor;
 }
 
 const CHAIN_IDS = ['tron-testnet', 'tron-shasta'];
 const CHAIN_NAME = 'TRON Shasta Testnet';
 const EXPLORER_URL = 'https://shasta.tronscan.org';
-
-// Same ABI as EVM factory (TRON uses Solidity)
-const ACCOUNT_FACTORY_ABI = [
-  {
-    inputs: [
-      { name: 'owner', type: 'address' },
-      { name: 'adiURL', type: 'string' },
-      { name: 'salt', type: 'uint256' }
-    ],
-    name: 'createAccountIfNotExists',
-    outputs: [{ name: 'account', type: 'address' }],
-    stateMutability: 'payable',
-    type: 'function'
-  },
-  {
-    inputs: [
-      { name: 'owner', type: 'address' },
-      { name: 'adiURL', type: 'string' },
-      { name: 'salt', type: 'uint256' }
-    ],
-    name: 'getAddress',
-    outputs: [{ name: 'accountAddress', type: 'address' }],
-    stateMutability: 'view',
-    type: 'function'
-  },
-  {
-    inputs: [{ name: 'account', type: 'address' }],
-    name: 'isDeployedAccount',
-    outputs: [{ name: '', type: 'bool' }],
-    stateMutability: 'view',
-    type: 'function'
-  },
-  {
-    inputs: [],
-    name: 'deploymentFee',
-    outputs: [{ name: '', type: 'uint256' }],
-    stateMutability: 'view',
-    type: 'function'
-  }
-];
 
 export class TronChainHandler implements ChainHandler {
   readonly chainIds = CHAIN_IDS;
@@ -94,25 +50,59 @@ export class TronChainHandler implements ChainHandler {
     if (privateKey) {
       config.privateKey = privateKey;
     }
-    return new TronWeb(config);
+    const tronWeb = new TronWeb(config);
+    // TronWeb requires a default address set for view calls (owner_address)
+    tronWeb.setAddress(this.factoryAddress);
+    return tronWeb;
+  }
+
+  /** Call a view function on the factory using triggerConstantContract */
+  private async callView(tronWeb: any, functionSelector: string, params: any[]): Promise<string> {
+    const result = await tronWeb.transactionBuilder.triggerConstantContract(
+      this.factoryAddress,
+      functionSelector,
+      {},
+      params
+    );
+    if (!result?.constant_result?.[0]) {
+      throw new Error(`View call ${functionSelector} returned no result`);
+    }
+    return result.constant_result[0];
+  }
+
+  /** Parse a TRON address (20 bytes, right-aligned) from ABI-encoded hex output */
+  private parseAddressResult(tronWeb: any, hexResult: string): string {
+    // ABI-encoded address is 32 bytes, address in last 20 bytes
+    const rawHex = hexResult.slice(-40);
+    const tronHex = '41' + rawHex;
+    return tronWeb.address.fromHex(tronHex);
+  }
+
+  /** Parse a bool from ABI-encoded hex output */
+  private parseBoolResult(hexResult: string): boolean {
+    return hexResult.replace(/^0+/, '') === '1';
   }
 
   async getAccountAddress(adiUrl: string): Promise<AccountAddressResult> {
     const tronWeb = await this.createTronWeb();
-    const ownerAddress = deriveEvmOwner(adiUrl);
+    const evmOwner = deriveEvmOwner(adiUrl);
+    const ownerTronHex = tronWeb.address.toHex(evmOwner);
     const salt = deriveSaltU256(adiUrl);
 
-    // Get factory contract instance
-    const factory = await tronWeb.contract(ACCOUNT_FACTORY_ABI, this.factoryAddress);
+    // Call getAddress(address,string,uint256)
+    const addressResult = await this.callView(tronWeb, 'getAddress(address,string,uint256)', [
+      { type: 'address', value: ownerTronHex },
+      { type: 'string', value: adiUrl },
+      { type: 'uint256', value: salt.toString() },
+    ]);
+    const predictedAddress = this.parseAddressResult(tronWeb, addressResult);
 
-    // Call getAddress view function
-    const resultHex: string = await factory.getAddress(ownerAddress, adiUrl, salt.toString()).call();
-
-    // Convert hex address (41...) to Base58Check (T...)
-    const predictedAddress = tronWeb.address.fromHex(resultHex);
-
-    // Check if deployed
-    const isDeployed: boolean = await factory.isDeployedAccount(resultHex).call();
+    // Call isDeployedAccount(address)
+    const rawAddrHex = addressResult.slice(-40);
+    const deployResult = await this.callView(tronWeb, 'isDeployedAccount(address)', [
+      { type: 'address', value: '41' + rawAddrHex },
+    ]);
+    const isDeployed = this.parseBoolResult(deployResult);
 
     return {
       accountAddress: predictedAddress,
@@ -129,45 +119,51 @@ export class TronChainHandler implements ChainHandler {
     const sponsorPrivateKey = process.env.TRON_SPONSOR_PRIVATE_KEY!;
     const tronWeb = await this.createTronWeb(sponsorPrivateKey);
 
-    const ownerAddress = deriveEvmOwner(adiUrl);
-    const salt = deriveSaltU256(adiUrl);
+    // Check current state
+    const addressResult = await this.getAccountAddress(adiUrl);
 
-    const factory = await tronWeb.contract(ACCOUNT_FACTORY_ABI, this.factoryAddress);
-
-    // Check if already deployed
-    const resultHex: string = await factory.getAddress(ownerAddress, adiUrl, salt.toString()).call();
-    const predictedAddress = tronWeb.address.fromHex(resultHex);
-    const isDeployed: boolean = await factory.isDeployedAccount(resultHex).call();
-
-    if (isDeployed) {
+    if (addressResult.isDeployed) {
       return {
-        accountAddress: predictedAddress,
+        accountAddress: addressResult.accountAddress,
         alreadyExisted: true,
         transactionHash: null,
-        explorerUrl: `${EXPLORER_URL}/#/address/${predictedAddress}`,
+        explorerUrl: addressResult.explorerUrl,
         message: 'Certen Abstract Account already exists at this address'
       };
     }
 
     // Get deployment fee
-    const deploymentFee = await factory.deploymentFee().call();
-    const feeValue = Number(deploymentFee);
+    const feeResult = await this.callView(tronWeb, 'deploymentFee()', []);
+    const feeValue = parseInt(feeResult, 16);
 
-    // Deploy the account
+    // Deploy via triggerSmartContract
+    const evmOwner = deriveEvmOwner(adiUrl);
+    const ownerTronHex = tronWeb.address.toHex(evmOwner);
+    const salt = deriveSaltU256(adiUrl);
+
     console.log(`  Deploying on TRON Shasta...`);
-    const tx = await factory.createAccountIfNotExists(ownerAddress, adiUrl, salt.toString()).send({
-      callValue: feeValue,
-      feeLimit: 100000000, // 100 TRX max fee
-    });
+    const txResult = await tronWeb.transactionBuilder.triggerSmartContract(
+      this.factoryAddress,
+      'createAccountIfNotExists(address,string,uint256)',
+      { callValue: feeValue, feeLimit: 100000000 },
+      [
+        { type: 'address', value: ownerTronHex },
+        { type: 'string', value: adiUrl },
+        { type: 'uint256', value: salt.toString() },
+      ]
+    );
 
-    const deployedAddress = tronWeb.address.fromHex(resultHex);
-    console.log(`  ✅ TRON account deployed: ${deployedAddress}`);
+    const signedTx = await tronWeb.trx.sign(txResult.transaction);
+    const broadcast = await tronWeb.trx.sendRawTransaction(signedTx);
+    const txHash = broadcast.txid || broadcast.transaction?.txID || '';
+
+    console.log(`  ✅ TRON account deployed: ${addressResult.accountAddress}`);
 
     return {
-      accountAddress: deployedAddress,
+      accountAddress: addressResult.accountAddress,
       alreadyExisted: false,
-      transactionHash: tx,
-      explorerUrl: `${EXPLORER_URL}/#/transaction/${tx}`,
+      transactionHash: txHash,
+      explorerUrl: `${EXPLORER_URL}/#/transaction/${txHash}`,
       message: 'Certen Abstract Account deployed successfully on TRON Shasta Testnet'
     };
   }
