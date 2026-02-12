@@ -195,7 +195,8 @@ export class NearChainHandler implements ChainHandler {
     const ownerEth = this.deriveOwnerEth(adiUrl);
     const salt = deriveSafeSalt(adiUrl);
 
-    const result = await sponsorAccount.callFunction({
+    // Use callFunctionRaw to get the full transaction outcome (callFunction only returns the contract's return value)
+    const outcome = await sponsorAccount.callFunctionRaw({
       contractId: this.factoryAccount,
       methodName: 'create_account',
       args: {
@@ -208,7 +209,9 @@ export class NearChainHandler implements ChainHandler {
       deposit: BigInt('5000000000000000000000000'), // 5 NEAR for sub-account creation + storage
     } as any);
 
-    const txHash = (result as any)?.transaction?.hash || 'unknown';
+    const txHash = (outcome as any)?.transaction_outcome?.id
+      || (outcome as any)?.transaction?.hash
+      || 'unknown';
     const finalAddress = addressResult.accountAddress;
     console.log(`  ✅ NEAR account deployed: ${finalAddress}`);
 
