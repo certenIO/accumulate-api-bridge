@@ -4,17 +4,44 @@
  * Uses NEAR's subaccount model for deterministic account creation.
  * Factory contract: certen-factory.testnet
  *
+ * The contract's create_account(owner, owner_eth, adi_url, salt) expects:
+ *   - owner: AccountId (64-char hex implicit account = deriveOwnerBytes32)
+ *   - owner_eth: String (EVM address = deriveEvmOwner)
+ *   - adi_url: String
+ *   - salt: u64 (JSON number — must fit in JS Number.MAX_SAFE_INTEGER)
+ *
  * Uses near-api-js v7 (JsonRpcProvider + Account class).
  */
 
 import { JsonRpcProvider, Account, KeyPair, KeyPairSigner } from 'near-api-js';
-import { ethers } from 'ethers';
+import { createHash } from 'crypto';
 import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
-import { deriveOwnerBytes32, deriveSaltU64 } from './utils.js';
+import { deriveOwnerBytes32, deriveEvmOwner, adiUrlHash } from './utils.js';
 
 const CHAIN_IDS = ['near-testnet'];
 const CHAIN_NAME = 'NEAR Testnet';
 const EXPLORER_URL = 'https://testnet.nearblocks.io';
+
+/**
+ * Derive a u64 salt that fits within JS Number.MAX_SAFE_INTEGER.
+ * Truncates keccak256 to 53 bits so it can be serialized as a JSON number.
+ * The NEAR contract expects salt: u64 via serde JSON (not U64 string wrapper).
+ */
+function deriveSafeSalt(adiUrl: string): number {
+  const hash = adiUrlHash(adiUrl);
+  const full = BigInt(hash);
+  // Truncate to 53 bits (Number.MAX_SAFE_INTEGER = 2^53 - 1)
+  const safe = full % (2n ** 53n);
+  return Number(safe);
+}
+
+/**
+ * Compute keccak256 locally to match the contract's derive_account_id.
+ * The contract does: keccak256(owner.as_bytes() + adi_url.as_bytes() + salt.to_le_bytes())
+ */
+function keccak256Bytes(data: Buffer): Buffer {
+  return createHash('sha3-256').update(data).digest();
+}
 
 export class NearChainHandler implements ChainHandler {
   readonly chainIds = CHAIN_IDS;
@@ -38,23 +65,45 @@ export class NearChainHandler implements ChainHandler {
   }
 
   /**
-   * Compute the deterministic sub-account ID.
-   * Format: {hex-prefix}.certen-factory.testnet
-   * where hex-prefix is first 16 bytes of keccak256(owner + adiUrl + salt)
+   * Derive the owner AccountId (64-char hex = NEAR implicit account).
+   */
+  private deriveOwner(adiUrl: string): string {
+    return deriveOwnerBytes32(adiUrl);
+  }
+
+  /**
+   * Derive the owner's EVM address (for owner_eth parameter).
+   */
+  private deriveOwnerEth(adiUrl: string): string {
+    return deriveEvmOwner(adiUrl);
+  }
+
+  /**
+   * Compute the deterministic sub-account ID locally.
+   * Matches the contract's derive_account_id:
+   *   keccak256(owner_bytes + adi_url_bytes + salt_le_bytes) -> first 16 bytes hex
+   *   -> "{hex}.certen-factory.testnet"
    */
   private computeAccountId(adiUrl: string): string {
-    const owner = deriveOwnerBytes32(adiUrl);
-    const salt = deriveSaltU64(adiUrl).toString();
-    const combined = owner + adiUrl + salt;
-    const hash = ethers.keccak256(ethers.toUtf8Bytes(combined));
-    // NEAR account IDs must be lowercase alphanumeric; use first 16 bytes hex
-    const prefix = hash.slice(2, 34); // 16 bytes = 32 hex chars
+    const owner = this.deriveOwner(adiUrl);
+    const salt = deriveSafeSalt(adiUrl);
+
+    // Match contract: hasher.update(owner.as_bytes()) — owner is a string, use its UTF-8 bytes
+    const ownerBytes = Buffer.from(owner, 'utf-8');
+    const adiBytes = Buffer.from(adiUrl, 'utf-8');
+    // salt.to_le_bytes() — u64 as 8 little-endian bytes
+    const saltBytes = Buffer.alloc(8);
+    saltBytes.writeBigUInt64LE(BigInt(salt));
+
+    const data = Buffer.concat([ownerBytes, adiBytes, saltBytes]);
+    const hash = keccak256Bytes(data);
+    // First 16 bytes as hex
+    const prefix = hash.subarray(0, 16).toString('hex');
     return `${prefix}.${this.factoryAccount}`;
   }
 
   async getAccountAddress(adiUrl: string): Promise<AccountAddressResult> {
     const provider = this.getProvider();
-    const accountId = this.computeAccountId(adiUrl);
 
     // Try to query the factory's view function first
     try {
@@ -63,9 +112,9 @@ export class NearChainHandler implements ChainHandler {
         contractId: this.factoryAccount,
         methodName: 'get_account_id',
         args: {
-          owner: deriveOwnerBytes32(adiUrl),
+          owner: this.deriveOwner(adiUrl),
           adi_url: adiUrl,
-          salt: deriveSaltU64(adiUrl).toString(),
+          salt: deriveSafeSalt(adiUrl),
         },
       });
       // callFunction returns the result; check if it's a string account ID
@@ -84,11 +133,13 @@ export class NearChainHandler implements ChainHandler {
           explorerUrl: `${EXPLORER_URL}/address/${result}`
         };
       }
-    } catch {
-      // View function not available, use local computation
+    } catch (err: any) {
+      console.error('NEAR get_account_id view call failed:', err?.message || err);
+      // Fall through to local computation
     }
 
-    // Fallback: check if locally computed account exists
+    // Fallback: compute locally and check if account exists
+    const accountId = this.computeAccountId(adiUrl);
     let isDeployed = false;
     try {
       const acct = new Account(accountId, provider);
@@ -131,15 +182,17 @@ export class NearChainHandler implements ChainHandler {
     const signer = new KeyPairSigner(keyPair);
     const sponsorAccount = new Account(sponsorAccountId, provider, signer);
 
-    // Call create_account on the factory
-    const owner = deriveOwnerBytes32(adiUrl);
-    const salt = deriveSaltU64(adiUrl).toString();
+    // Derive all parameters
+    const owner = this.deriveOwner(adiUrl);
+    const ownerEth = this.deriveOwnerEth(adiUrl);
+    const salt = deriveSafeSalt(adiUrl);
 
     const result = await sponsorAccount.callFunction({
       contractId: this.factoryAccount,
       methodName: 'create_account',
       args: {
         owner,
+        owner_eth: ownerEth,
         adi_url: adiUrl,
         salt,
       },
