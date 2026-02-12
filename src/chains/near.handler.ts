@@ -105,33 +105,41 @@ export class NearChainHandler implements ChainHandler {
   async getAccountAddress(adiUrl: string): Promise<AccountAddressResult> {
     const provider = this.getProvider();
 
-    // Try to query the factory's view function first
+    // Try to query the factory's view function via RPC (no signer needed)
     try {
-      const factoryAccount = new Account(this.factoryAccount, provider);
-      const result = await factoryAccount.callFunction({
-        contractId: this.factoryAccount,
-        methodName: 'get_account_id',
-        args: {
-          owner: this.deriveOwner(adiUrl),
-          adi_url: adiUrl,
-          salt: deriveSafeSalt(adiUrl),
-        },
+      const args = {
+        owner: this.deriveOwner(adiUrl),
+        adi_url: adiUrl,
+        salt: deriveSafeSalt(adiUrl),
+      };
+      const argsBase64 = Buffer.from(JSON.stringify(args)).toString('base64');
+      const response = await (provider as any).query({
+        request_type: 'call_function',
+        account_id: this.factoryAccount,
+        method_name: 'get_account_id',
+        args_base64: argsBase64,
+        finality: 'optimistic',
       });
-      // callFunction returns the result; check if it's a string account ID
-      if (result && typeof result === 'string') {
-        let isDeployed = false;
-        try {
-          const acct = new Account(result, provider);
-          await acct.getState();
-          isDeployed = true;
-        } catch {
-          // Account doesn't exist
+      // Result is an array of bytes (UTF-8 JSON string)
+      if (response?.result) {
+        const resultStr = Buffer.from(response.result).toString('utf-8');
+        // Parse JSON string (NEAR view functions return JSON-encoded values)
+        const accountId = JSON.parse(resultStr);
+        if (accountId && typeof accountId === 'string') {
+          let isDeployed = false;
+          try {
+            const acct = new Account(accountId, provider);
+            await acct.getState();
+            isDeployed = true;
+          } catch {
+            // Account doesn't exist
+          }
+          return {
+            accountAddress: accountId,
+            isDeployed,
+            explorerUrl: `${EXPLORER_URL}/address/${accountId}`
+          };
         }
-        return {
-          accountAddress: result,
-          isDeployed,
-          explorerUrl: `${EXPLORER_URL}/address/${result}`
-        };
       }
     } catch (err: any) {
       console.error('NEAR get_account_id view call failed:', err?.message || err);
@@ -196,8 +204,8 @@ export class NearChainHandler implements ChainHandler {
         adi_url: adiUrl,
         salt,
       },
-      gas: BigInt('100000000000000'), // 100 TGas
-      deposit: BigInt('100000000000000000000000'), // 0.1 NEAR for storage
+      gas: BigInt('300000000000000'), // 300 TGas (max — create_account does CPI)
+      deposit: BigInt('5000000000000000000000000'), // 5 NEAR for sub-account creation + storage
     } as any);
 
     const txHash = (result as any)?.transaction?.hash || 'unknown';
