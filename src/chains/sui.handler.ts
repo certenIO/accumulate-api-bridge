@@ -48,11 +48,12 @@ export class SuiChainHandler implements ChainHandler {
     try {
       // Use devInspectTransactionBlock to call get_address read-only
       const tx = new Transaction();
+      // get_address(factory, owner, adi_url, salt)
       tx.moveCall({
         target: `${this.factoryPackage}::certen_account_factory::get_address`,
         arguments: [
           tx.object(this.factoryObjectId),
-          tx.pure.vector('u8', Array.from(Buffer.from(deriveOwnerBytes32(adiUrl), 'hex'))),
+          tx.pure.address(ownerHex),
           tx.pure.string(adiUrl),
           tx.pure.u64(salt),
         ],
@@ -113,21 +114,51 @@ export class SuiChainHandler implements ChainHandler {
     }
 
     const client = this.getClient();
+    const ownerHex = '0x' + deriveOwnerBytes32(adiUrl);
     const salt = deriveSaltU64(adiUrl);
 
     // Build deployment transaction
     const sponsorKeyStr = process.env.SUI_SPONSOR_PRIVATE_KEY!;
     const { secretKey } = decodeSuiPrivateKey(sponsorKeyStr);
     const keypair = Ed25519Keypair.fromSecretKey(secretKey);
+    const senderAddress = keypair.getPublicKey().toSuiAddress();
 
+    // Query deployment fee from factory
+    let deploymentFee = BigInt(100000000); // default 0.1 SUI
+    try {
+      const feeResult = await client.devInspectTransactionBlock({
+        transactionBlock: (() => {
+          const t = new Transaction();
+          t.moveCall({
+            target: `${this.factoryPackage}::certen_account_factory::get_deployment_fee`,
+            arguments: [t.object(this.factoryObjectId)],
+          });
+          return t as any;
+        })(),
+        sender: '0x0000000000000000000000000000000000000000000000000000000000000000',
+      });
+      if ((feeResult as any)?.results?.[0]?.returnValues?.[0]) {
+        const [feeBytes] = (feeResult as any).results[0].returnValues[0];
+        if (Array.isArray(feeBytes) && feeBytes.length === 8) {
+          deploymentFee = Buffer.from(feeBytes).readBigUInt64LE();
+        }
+      }
+    } catch {
+      // Use default fee
+    }
+
+    // create_account(factory, clock, owner, adi_url, salt, payment, ctx)
     const tx = new Transaction();
+    const [paymentCoin] = tx.splitCoins(tx.gas, [deploymentFee]);
     tx.moveCall({
       target: `${this.factoryPackage}::certen_account_factory::create_account`,
       arguments: [
-        tx.object(this.factoryObjectId),
-        tx.pure.vector('u8', Array.from(Buffer.from(deriveOwnerBytes32(adiUrl), 'hex'))),
-        tx.pure.string(adiUrl),
-        tx.pure.u64(salt),
+        tx.object(this.factoryObjectId),       // factory: &mut Factory
+        tx.object('0x6'),                       // clock: &Clock
+        tx.pure.address(ownerHex),              // owner: address
+        tx.pure.string(adiUrl),                 // adi_url: String
+        tx.pure.u64(salt),                      // salt: u64
+        paymentCoin,                            // payment: Coin<SUI>
       ],
     });
 
