@@ -189,12 +189,13 @@ export class NearChainHandler implements ChainHandler {
         balance: `${isNaN(balanceNear) ? 0 : balanceNear.toFixed(4)} NEAR`,
         minBalance: `${minBalance} NEAR`
       };
-    } catch (err) {
+    } catch (err: any) {
+      console.error('NEAR sponsor status error:', err?.message || err);
       return {
         name: this.chainName,
         available: false,
         factoryAddress: this.factoryAccount,
-        error: 'Failed to connect to NEAR Testnet'
+        error: `Failed to connect to NEAR Testnet: ${err?.message || 'unknown'}`
       };
     }
   }
