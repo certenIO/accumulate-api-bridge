@@ -154,14 +154,10 @@ export class AptosChainHandler implements ChainHandler {
       const privateKey = new Ed25519PrivateKey(rawKey);
       const sponsorAccount = Account.fromPrivateKey({ privateKey });
 
-      const resources = await aptos.getAccountResources({
+      const balanceOctas = await aptos.getAccountAPTAmount({
         accountAddress: sponsorAccount.accountAddress,
       });
-
-      const coinResource = resources.find(
-        (r: any) => r.type === '0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>'
-      );
-      const balance = coinResource ? Number((coinResource.data as any).coin.value) / 1e8 : 0;
+      const balance = balanceOctas / 1e8;
       const minBalance = 0.1; // 0.1 APT minimum
 
       return {
