@@ -51,8 +51,12 @@ export class TronChainHandler implements ChainHandler {
       config.privateKey = privateKey;
     }
     const tronWeb = new TronWeb(config);
-    // TronWeb requires a default address set for view calls (owner_address)
-    tronWeb.setAddress(this.factoryAddress);
+    // Only override address for view-only instances (no private key).
+    // When a private key is set, TronWeb derives the correct address from it.
+    // Overriding would cause "Private key does not match address" on sign().
+    if (!privateKey) {
+      tronWeb.setAddress(this.factoryAddress);
+    }
     return tronWeb;
   }
 
