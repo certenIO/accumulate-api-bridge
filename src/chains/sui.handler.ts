@@ -10,6 +10,7 @@
 import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc';
 import { Transaction } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
 import { deriveOwnerBytes32, deriveSaltU64 } from './utils.js';
 
@@ -116,7 +117,8 @@ export class SuiChainHandler implements ChainHandler {
 
     // Build deployment transaction
     const sponsorKeyStr = process.env.SUI_SPONSOR_PRIVATE_KEY!;
-    const keypair = Ed25519Keypair.fromSecretKey(Buffer.from(sponsorKeyStr, 'base64'));
+    const { secretKey } = decodeSuiPrivateKey(sponsorKeyStr);
+    const keypair = Ed25519Keypair.fromSecretKey(secretKey);
 
     const tx = new Transaction();
     tx.moveCall({
@@ -164,7 +166,8 @@ export class SuiChainHandler implements ChainHandler {
     try {
       const client = this.getClient();
       const sponsorKeyStr = process.env.SUI_SPONSOR_PRIVATE_KEY!;
-      const keypair = Ed25519Keypair.fromSecretKey(Buffer.from(sponsorKeyStr, 'base64'));
+      const { secretKey } = decodeSuiPrivateKey(sponsorKeyStr);
+    const keypair = Ed25519Keypair.fromSecretKey(secretKey);
       const address = keypair.getPublicKey().toSuiAddress();
 
       const balance = await client.getBalance({ owner: address });
