@@ -102,8 +102,9 @@ export class AptosChainHandler implements ChainHandler {
     }
 
     // Build and submit transaction
-    const sponsorKeyHex = process.env.APTOS_SPONSOR_PRIVATE_KEY!;
-    const privateKey = new Ed25519PrivateKey(sponsorKeyHex);
+    // APTOS_SPONSOR_PRIVATE_KEY may have "ed25519-priv-" prefix — strip it
+    const rawKey = process.env.APTOS_SPONSOR_PRIVATE_KEY!.replace(/^ed25519-priv-/, '');
+    const privateKey = new Ed25519PrivateKey(rawKey);
     const sponsorAccount = Account.fromPrivateKey({ privateKey });
 
     const txn = await aptos.transaction.build.simple({
@@ -149,8 +150,8 @@ export class AptosChainHandler implements ChainHandler {
 
     try {
       const aptos = this.getClient();
-      const sponsorKeyHex = process.env.APTOS_SPONSOR_PRIVATE_KEY!;
-      const privateKey = new Ed25519PrivateKey(sponsorKeyHex);
+      const rawKey = process.env.APTOS_SPONSOR_PRIVATE_KEY!.replace(/^ed25519-priv-/, '');
+      const privateKey = new Ed25519PrivateKey(rawKey);
       const sponsorAccount = Account.fromPrivateKey({ privateKey });
 
       const resources = await aptos.getAccountResources({
