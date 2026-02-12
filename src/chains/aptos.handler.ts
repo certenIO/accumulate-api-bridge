@@ -5,7 +5,7 @@
  * Factory package: CertenAccountFactory on Aptos Testnet.
  */
 
-import { Aptos, AptosConfig, Network, Account, Ed25519PrivateKey } from '@aptos-labs/ts-sdk';
+import { Aptos, AptosConfig, Network, Account, Ed25519PrivateKey, MoveVector, MoveString } from '@aptos-labs/ts-sdk';
 import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
 import { deriveOwnerBytes32, deriveSaltU64 } from './utils.js';
 
@@ -44,11 +44,13 @@ export class AptosChainHandler implements ChainHandler {
 
     try {
       // Call the view function to get the predicted address
+      // Signature: get_address(factory_addr: address, owner: address, adi_url: vector<u8>, salt: u64)
+      const adiUrlBytes = Array.from(Buffer.from(adiUrl, 'utf-8'));
       const result = await aptos.view({
         payload: {
           function: `${this.factoryPackage}::certen_account_factory::get_address`,
           typeArguments: [],
-          functionArguments: [ownerHex, adiUrl, salt.toString()],
+          functionArguments: [this.factoryPackage, ownerHex, MoveVector.U8(adiUrlBytes), salt.toString()],
         }
       });
 
@@ -107,12 +109,15 @@ export class AptosChainHandler implements ChainHandler {
     const privateKey = new Ed25519PrivateKey(rawKey);
     const sponsorAccount = Account.fromPrivateKey({ privateKey });
 
+    // Signature: create_account(caller: &signer, factory_addr: address, owner: address, adi_url: vector<u8>, salt: u64)
+    // Note: &signer is implicit (the sender), not passed as an argument
+    const adiUrlBytes = Array.from(Buffer.from(adiUrl, 'utf-8'));
     const txn = await aptos.transaction.build.simple({
       sender: sponsorAccount.accountAddress,
       data: {
         function: `${this.factoryPackage}::certen_account_factory::create_account`,
         typeArguments: [],
-        functionArguments: [ownerHex, adiUrl, salt.toString()],
+        functionArguments: [this.factoryPackage, ownerHex, MoveVector.U8(adiUrlBytes), salt.toString()],
       },
     });
 
