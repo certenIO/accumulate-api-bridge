@@ -27,7 +27,7 @@ export class SuiChainHandler implements ChainHandler {
 
   constructor() {
     this.factoryPackage = process.env.SUI_FACTORY_PACKAGE || '0xf9f8f5c8349e04404631531f2420cd45805934839867daa1f4c043ec06b6ade2';
-    this.factoryObjectId = process.env.SUI_FACTORY_OBJECT || this.factoryPackage;
+    this.factoryObjectId = process.env.SUI_FACTORY_OBJECT || '0x136a403bca2bedeaa7dc8c5b95e48a25071f4945cee7765ac1cf4971683266e2';
     this.rpcUrl = process.env.SUI_TESTNET_RPC_URL || getJsonRpcFullnodeUrl('testnet');
   }
 
