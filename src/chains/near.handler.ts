@@ -175,14 +175,16 @@ export class NearChainHandler implements ChainHandler {
       const sponsorAccountId = process.env.NEAR_SPONSOR_ACCOUNT_ID!;
       const account = new Account(sponsorAccountId, provider);
       const state = await account.getState() as any;
-      const balanceNear = Number(state.balance || state.amount || 0) / 1e24;
+      // near-api-js v7 may nest under result or return flat; handle both
+      const raw = state?.result?.amount || state?.amount || state?.balance || state?.result?.balance || '0';
+      const balanceNear = Number(raw) / 1e24;
       const minBalance = 1.0; // 1 NEAR minimum
 
       return {
         name: this.chainName,
-        available: balanceNear >= minBalance,
+        available: !isNaN(balanceNear) && balanceNear >= minBalance,
         factoryAddress: this.factoryAccount,
-        balance: `${balanceNear.toFixed(4)} NEAR`,
+        balance: `${isNaN(balanceNear) ? 0 : balanceNear.toFixed(4)} NEAR`,
         minBalance: `${minBalance} NEAR`
       };
     } catch (err) {

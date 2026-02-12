@@ -180,8 +180,10 @@ export class TronChainHandler implements ChainHandler {
 
     try {
       const sponsorPrivateKey = process.env.TRON_SPONSOR_PRIVATE_KEY!;
-      const tronWeb = await this.createTronWeb(sponsorPrivateKey);
-      const address = tronWeb.defaultAddress.base58;
+      // Don't use createTronWeb() here since it overrides defaultAddress to factory
+      const TronWeb = await getTronWeb();
+      const tronWeb = new TronWeb({ fullHost: this.rpcUrl, privateKey: sponsorPrivateKey });
+      const address = process.env.TRON_SPONSOR_ADDRESS || tronWeb.defaultAddress.base58;
       const balanceSun = await tronWeb.trx.getBalance(address);
       const balanceTrx = balanceSun / 1e6;
       const minBalance = 10; // 10 TRX minimum
