@@ -175,9 +175,11 @@ export class NearChainHandler implements ChainHandler {
       const sponsorAccountId = process.env.NEAR_SPONSOR_ACCOUNT_ID!;
       const account = new Account(sponsorAccountId, provider);
       const state = await account.getState() as any;
-      // near-api-js v7 may nest under result or return flat; handle both
-      const raw = state?.result?.amount || state?.amount || state?.balance || state?.result?.balance || '0';
-      const balanceNear = Number(raw) / 1e24;
+      // near-api-js v7 returns { balance: BigInt, storageUsage: BigInt, codeHash: string }
+      const raw = state?.balance ?? state?.amount ?? state?.result?.amount ?? 0n;
+      // Convert BigInt or string to number safely
+      const balanceYocto = typeof raw === 'bigint' ? raw : BigInt(String(raw));
+      const balanceNear = Number(balanceYocto / BigInt(1e12)) / 1e12; // split to avoid precision loss
       const minBalance = 1.0; // 1 NEAR minimum
 
       return {
