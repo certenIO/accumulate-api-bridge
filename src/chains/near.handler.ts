@@ -24,7 +24,7 @@ export class NearChainHandler implements ChainHandler {
 
   constructor() {
     this.factoryAccount = process.env.NEAR_FACTORY_ACCOUNT || 'certen-factory.testnet';
-    this.rpcUrl = process.env.NEAR_TESTNET_RPC_URL || 'https://rpc.testnet.near.org';
+    this.rpcUrl = process.env.NEAR_TESTNET_RPC_URL || 'https://rpc.testnet.fastnear.com';
   }
 
   isSponsorConfigured(): boolean {
