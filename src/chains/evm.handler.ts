@@ -235,12 +235,14 @@ export class EvmChainHandler implements ChainHandler {
 }
 
 // ---- EVM chain configurations ----
+// V5 Factory: deterministic cross-chain address (same on all EVM chains)
+const V5_FACTORY = '0x2e6037afFA783d487664b2440c691fc86Bc18A17';
 
 const SEPOLIA_CONFIG: ChainConfig = {
   chainId: 'sepolia',
   name: 'Ethereum Sepolia',
   rpcUrl: process.env.EVM_SEPOLIA_RPC_URL || 'https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_SEPOLIA_ACCOUNT_FACTORY || '0xc0e54d4D1A5B25e4Cc719Bec436c44241F2BA5d9',
+  factoryAddress: process.env.EVM_SEPOLIA_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://sepolia.etherscan.io'
 };
 
@@ -248,7 +250,7 @@ const ARBITRUM_SEPOLIA_CONFIG: ChainConfig = {
   chainId: 'arbitrum-sepolia',
   name: 'Arbitrum Sepolia',
   rpcUrl: process.env.EVM_ARBITRUM_SEPOLIA_RPC_URL || 'https://arbitrum-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_ARBITRUM_SEPOLIA_ACCOUNT_FACTORY || '0x842271e696EFC9EC05161FAfBB611ccFC37F5cfa',
+  factoryAddress: process.env.EVM_ARBITRUM_SEPOLIA_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://sepolia.arbiscan.io'
 };
 
@@ -256,7 +258,7 @@ const BASE_SEPOLIA_CONFIG: ChainConfig = {
   chainId: 'base-sepolia',
   name: 'Base Sepolia',
   rpcUrl: process.env.EVM_BASE_SEPOLIA_RPC_URL || 'https://base-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_BASE_SEPOLIA_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',
+  factoryAddress: process.env.EVM_BASE_SEPOLIA_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://sepolia-explorer.base.org'
 };
 
@@ -264,7 +266,7 @@ const BSC_TESTNET_CONFIG: ChainConfig = {
   chainId: 'bsc-testnet',
   name: 'BSC Testnet',
   rpcUrl: process.env.EVM_BSC_TESTNET_RPC_URL || 'https://data-seed-prebsc-1-s1.binance.org:8545',
-  factoryAddress: process.env.EVM_BSC_TESTNET_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',
+  factoryAddress: process.env.EVM_BSC_TESTNET_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://testnet.bscscan.com'
 };
 
@@ -272,7 +274,7 @@ const OPTIMISM_SEPOLIA_CONFIG: ChainConfig = {
   chainId: 'optimism-sepolia',
   name: 'Optimism Sepolia',
   rpcUrl: process.env.EVM_OPTIMISM_SEPOLIA_RPC_URL || 'https://optimism-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
-  factoryAddress: process.env.EVM_OPTIMISM_SEPOLIA_ACCOUNT_FACTORY || '0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3',
+  factoryAddress: process.env.EVM_OPTIMISM_SEPOLIA_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://sepolia-optimistic.etherscan.io'
 };
 
@@ -280,7 +282,7 @@ const POLYGON_AMOY_CONFIG: ChainConfig = {
   chainId: 'polygon-amoy',
   name: 'Polygon Amoy',
   rpcUrl: process.env.EVM_POLYGON_AMOY_RPC_URL || 'https://rpc-amoy.polygon.technology',
-  factoryAddress: process.env.EVM_POLYGON_AMOY_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',
+  factoryAddress: process.env.EVM_POLYGON_AMOY_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://amoy.polygonscan.com'
 };
 
@@ -288,7 +290,7 @@ const MOONBASE_ALPHA_CONFIG: ChainConfig = {
   chainId: 'moonbase-alpha',
   name: 'Moonbeam Moonbase Alpha',
   rpcUrl: process.env.EVM_MOONBASE_ALPHA_RPC_URL || 'https://rpc.api.moonbase.moonbeam.network',
-  factoryAddress: process.env.EVM_MOONBASE_ALPHA_ACCOUNT_FACTORY || '0x4e8a1F68f8965C136D505737dEfB154deD34EbFb',
+  factoryAddress: process.env.EVM_MOONBASE_ALPHA_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://moonbase.moonscan.io'
 };
 
