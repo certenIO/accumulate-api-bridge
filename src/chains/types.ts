@@ -30,6 +30,13 @@ export interface SponsorStatusResult {
   error?: string;
 }
 
+export interface AddressBalanceResult {
+  address: string;
+  balance: string;
+  symbol: string;
+  error?: string;
+}
+
 export interface ChainHandler {
   /** Chain IDs this handler responds to (e.g. ["sepolia", "11155111"]) */
   readonly chainIds: string[];
@@ -43,6 +50,8 @@ export interface ChainHandler {
   deployAccount(adiUrl: string): Promise<DeployAccountResult>;
   /** Get sponsor wallet status for this chain */
   getSponsorStatus(): Promise<SponsorStatusResult>;
+  /** Get native token balance for an arbitrary address */
+  getAddressBalance(address: string): Promise<AddressBalanceResult>;
 }
 
 export interface ChainConfig {

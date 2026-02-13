@@ -6,7 +6,7 @@
  */
 
 import { ethers } from 'ethers';
-import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, ChainConfig } from './types.js';
+import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult, ChainConfig } from './types.js';
 import { deriveEvmOwner, deriveSaltU256 } from './utils.js';
 
 // CertenAccountFactory ABI (minimal - only what we need)
@@ -183,6 +183,16 @@ export class EvmChainHandler implements ChainHandler {
       gasUsed: receipt.gasUsed.toString(),
       message: 'Certen Abstract Account deployed successfully'
     };
+  }
+
+  async getAddressBalance(address: string): Promise<AddressBalanceResult> {
+    try {
+      const provider = new ethers.JsonRpcProvider(this.config.rpcUrl);
+      const balance = await provider.getBalance(address);
+      return { address, balance: ethers.formatEther(balance), symbol: 'ETH' };
+    } catch (e: any) {
+      return { address, balance: '0', symbol: 'ETH', error: e.message };
+    }
   }
 
   async getSponsorStatus(): Promise<SponsorStatusResult> {

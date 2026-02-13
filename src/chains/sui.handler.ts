@@ -11,7 +11,7 @@ import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc';
 import { Transaction } from '@mysten/sui/transactions';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
-import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
+import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult } from './types.js';
 import { deriveOwnerBytes32, deriveSaltU64 } from './utils.js';
 
 const CHAIN_IDS = ['sui-testnet'];
@@ -182,6 +182,17 @@ export class SuiChainHandler implements ChainHandler {
       explorerUrl: `${EXPLORER_URL}/tx/${digest}`,
       message: 'Certen Abstract Account deployed successfully on Sui Testnet'
     };
+  }
+
+  async getAddressBalance(address: string): Promise<AddressBalanceResult> {
+    try {
+      const client = this.getClient();
+      const balance = await client.getBalance({ owner: address });
+      const balanceSui = Number((balance as any).totalBalance || 0) / 1e9;
+      return { address, balance: balanceSui.toFixed(6), symbol: 'SUI' };
+    } catch (e: any) {
+      return { address, balance: '0', symbol: 'SUI', error: e.message };
+    }
   }
 
   async getSponsorStatus(): Promise<SponsorStatusResult> {

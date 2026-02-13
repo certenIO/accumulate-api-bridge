@@ -10,7 +10,7 @@
 
 import { Connection, PublicKey, Keypair, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
 import { createHash } from 'crypto';
-import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
+import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult } from './types.js';
 import { deriveOwnerBytes32, deriveSaltU64 } from './utils.js';
 
 const CHAIN_IDS = ['solana-devnet'];
@@ -292,6 +292,16 @@ export class SolanaChainHandler implements ChainHandler {
       explorerUrl: `${EXPLORER_URL}/tx/${txHash}?cluster=devnet`,
       message: 'Certen Abstract Account deployed successfully on Solana Devnet'
     };
+  }
+
+  async getAddressBalance(address: string): Promise<AddressBalanceResult> {
+    try {
+      const connection = this.getConnection();
+      const balance = await connection.getBalance(new PublicKey(address));
+      return { address, balance: (balance / 1e9).toFixed(6), symbol: 'SOL' };
+    } catch (e: any) {
+      return { address, balance: '0', symbol: 'SOL', error: e.message };
+    }
   }
 
   async getSponsorStatus(): Promise<SponsorStatusResult> {

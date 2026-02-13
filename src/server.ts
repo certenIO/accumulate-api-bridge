@@ -16,6 +16,7 @@ import { AccumulateService } from './AccumulateService.js';
 import { AdiStorageService } from './AdiStorageService.js';
 import { CertenIntentService, CreateIntentRequest, CreateMultiLegIntentRequest, IntentLeg, ExecutionMode } from './CertenIntentService.js';
 import { getChainHandler, getAllChainHandlers, getRegisteredChainIds } from './chains/index.js';
+import { VALIDATOR_ADDRESSES, CHAIN_HANDLER_IDS, NON_EVM_CHAINS } from './chains/validator-addresses.js';
 
 // Load environment variables first
 dotenv.config();
@@ -3637,6 +3638,97 @@ app.get('/api/v1/chain/sponsor-status', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Failed to get sponsor status:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * GET /api/v1/chain/validator-balances
+ *
+ * Returns balances for all Certen validator nodes across all non-EVM chains.
+ * Queries each chain's RPC for native token balances.
+ *
+ * Optional query params:
+ *   ?chain=solana,sui   - filter to specific chains (comma-separated)
+ *   ?validator=1,2,3    - filter to specific validators (comma-separated)
+ */
+app.get('/api/v1/chain/validator-balances', async (req, res) => {
+  console.log('\n📊 GET /api/v1/chain/validator-balances');
+
+  try {
+    const chainFilter = req.query.chain
+      ? String(req.query.chain).split(',').map(c => c.trim().toLowerCase())
+      : null;
+    const validatorFilter = req.query.validator
+      ? String(req.query.validator).split(',').map(v => {
+          const num = v.trim();
+          return num.startsWith('validator-') ? num : `validator-${num}`;
+        })
+      : null;
+
+    const validators = Object.entries(VALIDATOR_ADDRESSES)
+      .filter(([vid]) => !validatorFilter || validatorFilter.includes(vid));
+
+    const chains = NON_EVM_CHAINS.filter(c => !chainFilter || chainFilter.includes(c));
+
+    // Build balance queries - all in parallel
+    const results: Record<string, Record<string, any>> = {};
+    const queries: Promise<void>[] = [];
+
+    for (const [vid, addrs] of validators) {
+      results[vid] = {};
+      for (const chain of chains) {
+        const handlerId = CHAIN_HANDLER_IDS[chain];
+        const handler = getChainHandler(handlerId);
+        if (!handler) continue;
+
+        const address = addrs[chain as keyof typeof addrs];
+        if (!address) continue;
+
+        queries.push(
+          handler.getAddressBalance(address).then(bal => {
+            results[vid][chain] = bal;
+          }).catch(err => {
+            results[vid][chain] = {
+              address,
+              balance: '0',
+              symbol: chain.toUpperCase(),
+              error: err.message,
+            };
+          })
+        );
+      }
+    }
+
+    await Promise.allSettled(queries);
+
+    // Build summary
+    const summary: Record<string, { total: number; symbol: string; funded: number; unfunded: number }> = {};
+    for (const chain of chains) {
+      const balances = Object.values(results).map(v => v[chain]).filter(Boolean);
+      const symbol = balances[0]?.symbol || chain.toUpperCase();
+      const funded = balances.filter(b => parseFloat(b.balance) > 0).length;
+      summary[chain] = {
+        total: balances.reduce((sum, b) => sum + parseFloat(b.balance || '0'), 0),
+        symbol,
+        funded,
+        unfunded: balances.length - funded,
+      };
+    }
+
+    res.json({
+      success: true,
+      validatorCount: validators.length,
+      chains: chains,
+      validators: results,
+      summary,
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get validator balances:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'

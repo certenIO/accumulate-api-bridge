@@ -15,7 +15,7 @@
 
 import { JsonRpcProvider, Account, KeyPair, KeyPairSigner } from 'near-api-js';
 import { createHash } from 'crypto';
-import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
+import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult } from './types.js';
 import { deriveOwnerBytes32, deriveEvmOwner, adiUrlHash } from './utils.js';
 
 const CHAIN_IDS = ['near-testnet'];
@@ -222,6 +222,29 @@ export class NearChainHandler implements ChainHandler {
       explorerUrl: `${EXPLORER_URL}/txns/${txHash}`,
       message: 'Certen Abstract Account deployed successfully on NEAR Testnet'
     };
+  }
+
+  async getAddressBalance(address: string): Promise<AddressBalanceResult> {
+    try {
+      const provider = this.getProvider();
+      const account = new Account(address, provider);
+      const state = await account.getState() as any;
+      let balanceYocto: bigint;
+      if (state?.balance?.total !== undefined) {
+        balanceYocto = BigInt(state.balance.total);
+      } else if (typeof state?.balance === 'bigint') {
+        balanceYocto = state.balance;
+      } else {
+        balanceYocto = BigInt(String(state?.amount || state?.balance || '0'));
+      }
+      const balanceNear = Number(balanceYocto / BigInt(1e12)) / 1e12;
+      return { address, balance: balanceNear.toFixed(6), symbol: 'NEAR' };
+    } catch (e: any) {
+      if (e.message?.includes('does not exist')) {
+        return { address, balance: '0', symbol: 'NEAR', error: 'Account not created' };
+      }
+      return { address, balance: '0', symbol: 'NEAR', error: e.message };
+    }
   }
 
   async getSponsorStatus(): Promise<SponsorStatusResult> {

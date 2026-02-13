@@ -8,7 +8,7 @@
 import { TonClient, WalletContractV4, Address, beginCell, toNano, internal } from '@ton/ton';
 import { mnemonicToPrivateKey } from '@ton/crypto';
 import { ethers } from 'ethers';
-import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
+import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult } from './types.js';
 import { deriveOwnerBytes32, deriveSaltU64 } from './utils.js';
 
 const CHAIN_IDS = ['ton-testnet'];
@@ -157,6 +157,17 @@ export class TonChainHandler implements ChainHandler {
       explorerUrl: finalResult.explorerUrl,
       message: 'Certen Abstract Account deployed successfully on TON Testnet'
     };
+  }
+
+  async getAddressBalance(address: string): Promise<AddressBalanceResult> {
+    try {
+      const client = this.getClient();
+      const addr = Address.parse(address);
+      const balance = await client.getBalance(addr);
+      return { address, balance: (Number(balance) / 1e9).toFixed(6), symbol: 'TON' };
+    } catch (e: any) {
+      return { address, balance: '0', symbol: 'TON', error: e.message };
+    }
   }
 
   async getSponsorStatus(): Promise<SponsorStatusResult> {

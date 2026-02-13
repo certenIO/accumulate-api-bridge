@@ -6,7 +6,7 @@
  */
 
 import { Aptos, AptosConfig, Network, Account, Ed25519PrivateKey, MoveVector, MoveString } from '@aptos-labs/ts-sdk';
-import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
+import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult } from './types.js';
 import { deriveOwnerBytes32, deriveSaltU64 } from './utils.js';
 
 const CHAIN_IDS = ['aptos-testnet'];
@@ -141,6 +141,23 @@ export class AptosChainHandler implements ChainHandler {
       explorerUrl: `${EXPLORER_URL}/txn/${pendingTxn.hash}?network=testnet`,
       message: 'Certen Abstract Account deployed successfully on Aptos Testnet'
     };
+  }
+
+  async getAddressBalance(address: string): Promise<AddressBalanceResult> {
+    try {
+      const aptos = this.getClient();
+      const result = await aptos.view({
+        payload: {
+          function: '0x1::coin::balance',
+          typeArguments: ['0x1::aptos_coin::AptosCoin'],
+          functionArguments: [address],
+        }
+      });
+      const balance = Number(result[0]) / 1e8;
+      return { address, balance: balance.toFixed(6), symbol: 'APT' };
+    } catch (e: any) {
+      return { address, balance: '0', symbol: 'APT', error: e.message };
+    }
   }
 
   async getSponsorStatus(): Promise<SponsorStatusResult> {

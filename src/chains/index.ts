@@ -33,4 +33,4 @@ console.log(`🔗 Registered ${getAllChainHandlers().length} chain handlers (${a
 
 // Re-export registry functions
 export { getChainHandler, getAllChainHandlers, getRegisteredChainIds };
-export type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
+export type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult } from './types.js';

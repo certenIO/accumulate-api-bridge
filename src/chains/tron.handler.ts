@@ -8,7 +8,7 @@
  * the tronWeb.contract() wrapper, which has address encoding issues in newer versions.
  */
 
-import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult } from './types.js';
+import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult } from './types.js';
 import { deriveEvmOwner, deriveSaltU256 } from './utils.js';
 
 // TronWeb is a CommonJS module; resolve the actual constructor from ESM import
@@ -170,6 +170,17 @@ export class TronChainHandler implements ChainHandler {
       explorerUrl: `${EXPLORER_URL}/#/transaction/${txHash}`,
       message: 'Certen Abstract Account deployed successfully on TRON Shasta Testnet'
     };
+  }
+
+  async getAddressBalance(address: string): Promise<AddressBalanceResult> {
+    try {
+      const TronWeb = await getTronWeb();
+      const tronWeb = new TronWeb({ fullHost: this.rpcUrl });
+      const balanceSun = await tronWeb.trx.getBalance(address);
+      return { address, balance: (balanceSun / 1e6).toFixed(6), symbol: 'TRX' };
+    } catch (e: any) {
+      return { address, balance: '0', symbol: 'TRX', error: e.message };
+    }
   }
 
   async getSponsorStatus(): Promise<SponsorStatusResult> {
