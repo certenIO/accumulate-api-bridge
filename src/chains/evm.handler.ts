@@ -121,29 +121,32 @@ export class EvmChainHandler implements ChainHandler {
     const provider = this.getProvider();
     const sponsorWallet = new ethers.Wallet(sponsorPrivateKey, provider);
 
-    // Check sponsor balance
-    const sponsorBalance = await provider.getBalance(sponsorWallet.address);
-    const minBalance = ethers.parseEther(process.env.EVM_SPONSOR_MIN_BALANCE || '0.01');
-    console.log(`  Sponsor balance: ${ethers.formatEther(sponsorBalance)} ETH`);
-
-    if (sponsorBalance < minBalance) {
-      throw new Error('Sponsor wallet balance too low. Please contact support.');
-    }
-
     const factory = new ethers.Contract(
       this.config.factoryAddress,
       ACCOUNT_FACTORY_ABI,
       sponsorWallet
     ) as any;
 
-    // Check if account already exists
-    const predictedAddress: string = await factory.getAddress(ownerAddress, adiUrl, salt);
+    // Parallel: check balance, predict address, and get fee in one round trip
+    const minBalance = ethers.parseEther(process.env.EVM_SPONSOR_MIN_BALANCE || '0.01');
+    const [sponsorBalance, predictedAddress, deploymentFee] = await Promise.all([
+      provider.getBalance(sponsorWallet.address),
+      factory.getAddress(ownerAddress, adiUrl, salt) as Promise<string>,
+      factory.deploymentFee() as Promise<bigint>,
+    ]);
+
+    console.log(`  Sponsor balance: ${ethers.formatEther(sponsorBalance)} ETH`);
+
+    if (sponsorBalance < minBalance) {
+      throw new Error('Sponsor wallet balance too low. Please contact support.');
+    }
 
     // Moonbeam fix: validate address
     if (!predictedAddress || predictedAddress === '0x0000000000000000000000000000000000000000') {
       throw new Error(`Factory on ${this.chainName} returned invalid address. The contract may not be properly deployed or may be incompatible.`);
     }
 
+    // Check if already deployed (needs predicted address from above)
     const alreadyDeployed: boolean = await factory.isDeployedAccount(predictedAddress);
 
     if (alreadyDeployed) {
@@ -158,7 +161,6 @@ export class EvmChainHandler implements ChainHandler {
 
     // Deploy the account
     console.log(`  Deploying on ${this.chainName}...`);
-    const deploymentFee = await factory.deploymentFee();
     console.log(`  Deployment fee: ${ethers.formatEther(deploymentFee)} ETH`);
 
     const tx = await factory.createAccountIfNotExists(ownerAddress, adiUrl, salt, { value: deploymentFee });
