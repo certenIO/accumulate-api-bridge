@@ -297,7 +297,8 @@ export class AccumulateService {
 
   async createDataAccount(adiName: string, dataAccountName: string): Promise<any> {
     try {
-      const adiUrl = `acc://${adiName}`;
+      const cleanName = adiName.replace(/^acc:\/\//, '');
+      const adiUrl = `acc://${cleanName}`;
       const dataAccountUrl = `${adiUrl}/${dataAccountName}`;
       const keyPageUrl = `${adiUrl}/book/1`;
 
@@ -492,7 +493,8 @@ export class AccumulateService {
   // Real KeyBook creation implementation
   async createKeyBook(adiName: string, keyBookName: string, publicKeyHash: string): Promise<any> {
     try {
-      const adiUrl = `acc://${adiName}`;
+      const cleanName = adiName.replace(/^acc:\/\//, '');
+      const adiUrl = `acc://${cleanName}`;
       const keyBookUrl = `${adiUrl}/${keyBookName}`;
       const keyPageUrl = `${adiUrl}/book/1`;
 
@@ -1531,7 +1533,8 @@ export class AccumulateService {
     error?: string;
   }> {
     try {
-      const adiUrl = `acc://${adiName}`;
+      const cleanName = adiName.replace(/^acc:\/\//, '');
+      const adiUrl = `acc://${cleanName}`;
       const keyBookUrl = `${adiUrl}/${keyBookName}`;
       const defaultSignerKeyPageUrl = signerKeyPageUrl || `${adiUrl}/book/1`;
 
@@ -2080,7 +2083,8 @@ export class AccumulateService {
       });
 
       // Construct data account URL
-      const dataAccountUrl = `acc://${adiName}.acme/${dataAccountName}`;
+      const cleanAdiName = adiName.replace(/^acc:\/\//, '').replace(/\.acme$/, '');
+      const dataAccountUrl = `acc://${cleanAdiName}.acme/${dataAccountName}`;
       this.logger.info('🎯 Data account URL:', { dataAccountUrl });
 
       // Get current version of data account
@@ -2096,7 +2100,7 @@ export class AccumulateService {
       }
 
       // Use provided signer key page URL or construct default
-      const finalSignerKeyPageUrl = signerKeyPageUrl || `acc://${adiName}.acme/book/1`;
+      const finalSignerKeyPageUrl = signerKeyPageUrl || `acc://${cleanAdiName}.acme/book/1`;
 
       // Use provided private key or fallback to environment
       const privateKeyToUse = adiPrivateKey || process.env.ACCUM_PRIV_KEY?.substring(0, 64) || '';
@@ -2336,10 +2340,11 @@ export class AccumulateService {
       });
 
       // Construct data account URL
-      const dataAccountUrl = `acc://${adiName}.acme/${dataAccountName}`;
+      const cleanAdiName = adiName.replace(/^acc:\/\//, '').replace(/\.acme$/, '');
+      const dataAccountUrl = `acc://${cleanAdiName}.acme/${dataAccountName}`;
 
       // Use provided signer key page URL or construct default
-      const finalSignerKeyPageUrl = signerKeyPageUrl || `acc://${adiName}.acme/book/1`;
+      const finalSignerKeyPageUrl = signerKeyPageUrl || `acc://${cleanAdiName}.acme/book/1`;
 
       // Get current version of data account
       let currentVersion = 1;

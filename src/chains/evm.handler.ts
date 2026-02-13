@@ -63,11 +63,19 @@ export class EvmChainHandler implements ChainHandler {
   readonly chainIds: string[];
   readonly chainName: string;
   private config: ChainConfig;
+  private _provider: ethers.JsonRpcProvider | null = null;
 
   constructor(config: ChainConfig, extraIds: string[] = []) {
     this.config = config;
     this.chainName = config.name;
     this.chainIds = [config.chainId, ...extraIds];
+  }
+
+  private getProvider(): ethers.JsonRpcProvider {
+    if (!this._provider) {
+      this._provider = new ethers.JsonRpcProvider(this.config.rpcUrl);
+    }
+    return this._provider;
   }
 
   isSponsorConfigured(): boolean {
@@ -79,15 +87,13 @@ export class EvmChainHandler implements ChainHandler {
     const ownerAddress = deriveEvmOwner(adiUrl);
     const salt = deriveSaltU256(adiUrl);
 
-    const provider = new ethers.JsonRpcProvider(this.config.rpcUrl);
     const factory = new ethers.Contract(
       this.config.factoryAddress,
       ACCOUNT_FACTORY_ABI,
-      provider
+      this.getProvider()
     ) as any;
 
-    const getAddressFn = factory.getFunction('getAddress');
-    const predictedAddress: string = await getAddressFn(ownerAddress, adiUrl, salt);
+    const predictedAddress: string = await factory.getAddress(ownerAddress, adiUrl, salt);
 
     // Moonbeam fix: validate that factory didn't return zero/empty address
     if (!predictedAddress || predictedAddress === '0x0000000000000000000000000000000000000000') {
@@ -112,7 +118,7 @@ export class EvmChainHandler implements ChainHandler {
     const salt = deriveSaltU256(adiUrl);
 
     const sponsorPrivateKey = process.env.EVM_SPONSOR_PRIVATE_KEY!;
-    const provider = new ethers.JsonRpcProvider(this.config.rpcUrl);
+    const provider = this.getProvider();
     const sponsorWallet = new ethers.Wallet(sponsorPrivateKey, provider);
 
     // Check sponsor balance
@@ -131,8 +137,7 @@ export class EvmChainHandler implements ChainHandler {
     ) as any;
 
     // Check if account already exists
-    const getAddressFn = factory.getFunction('getAddress');
-    const predictedAddress: string = await getAddressFn(ownerAddress, adiUrl, salt);
+    const predictedAddress: string = await factory.getAddress(ownerAddress, adiUrl, salt);
 
     // Moonbeam fix: validate address
     if (!predictedAddress || predictedAddress === '0x0000000000000000000000000000000000000000') {
@@ -187,8 +192,7 @@ export class EvmChainHandler implements ChainHandler {
 
   async getAddressBalance(address: string): Promise<AddressBalanceResult> {
     try {
-      const provider = new ethers.JsonRpcProvider(this.config.rpcUrl);
-      const balance = await provider.getBalance(address);
+      const balance = await this.getProvider().getBalance(address);
       return { address, balance: ethers.formatEther(balance), symbol: 'ETH' };
     } catch (e: any) {
       return { address, balance: '0', symbol: 'ETH', error: e.message };
@@ -207,8 +211,7 @@ export class EvmChainHandler implements ChainHandler {
     }
 
     try {
-      const provider = new ethers.JsonRpcProvider(this.config.rpcUrl);
-      const balance = await provider.getBalance(sponsorAddress);
+      const balance = await this.getProvider().getBalance(sponsorAddress);
       const minBalance = ethers.parseEther(process.env.EVM_SPONSOR_MIN_BALANCE || '0.01');
 
       return {

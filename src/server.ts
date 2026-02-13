@@ -3094,7 +3094,8 @@ app.post('/api/v1/onboarding/create-adi', async (req, res) => {
     }
 
     // Step 2: Check if ADI already exists
-    const normalizedName = adiName.endsWith('.acme') ? adiName : `${adiName}.acme`;
+    const strippedName = adiName.replace(/^acc:\/\//, '');
+    const normalizedName = strippedName.endsWith('.acme') ? strippedName : `${strippedName}.acme`;
     const adiUrl = `acc://${normalizedName}`;
 
     try {
