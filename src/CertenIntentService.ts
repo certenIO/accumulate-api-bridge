@@ -476,7 +476,7 @@ export class CertenIntentService {
       "gasPolicy": {
         "maxFeePerGasGwei": "20",
         "maxPriorityFeePerGasGwei": "2",
-        "gasLimit": 100000,
+        "gasLimit": 300000,
         "payer": "from",
         "gas_estimation_buffer": 1.2
       },
@@ -700,7 +700,7 @@ export class CertenIntentService {
     const targetChainCommitment = this.calculateTargetChainCommitment(request.intent);
 
     const defaultExecutionParams: ExecutionParameters = {
-      gasLimit: 21000,
+      gasLimit: 300000, // Must cover SSTORE in commitAnchor + BLS verification
       maxFeePerGas: "20000000000", // 20 gwei
       maxPriorityFeePerGas: "2000000000", // 2 gwei
       chainId: request.intent.toChainId || 11155111 // Default to Sepolia

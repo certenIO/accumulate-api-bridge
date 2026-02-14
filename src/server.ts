@@ -1795,7 +1795,7 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
       priority: "high",
       risk_level: parseFloat(intent.amount) > 1.0 ? "high" : "medium",
       compliance_required: false,
-      estimated_gas: (executionParameters?.gasLimit || 21000).toString(),
+      estimated_gas: (executionParameters?.gasLimit || 300000).toString(),
       estimated_fees: {
         network_fee_gwei: (parseInt(executionParameters?.maxFeePerGas || "20000000000") / 1e9).toString(),
         priority_fee_gwei: (parseInt(executionParameters?.maxPriorityFeePerGas || "2000000000") / 1e9).toString(),
@@ -1846,7 +1846,7 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
           gasPolicy: {
             maxFeePerGasGwei: (parseInt(executionParameters?.maxFeePerGas || "20000000000") / 1e9).toString(),
             maxPriorityFeePerGasGwei: (parseInt(executionParameters?.maxPriorityFeePerGas || "2000000000") / 1e9).toString(),
-            gasLimit: executionParameters?.gasLimit || 21000,
+            gasLimit: executionParameters?.gasLimit || 300000,
             payer: "from",
             gas_estimation_buffer: 1.2
           },
