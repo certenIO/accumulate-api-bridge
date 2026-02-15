@@ -195,7 +195,15 @@ export class NearChainHandler implements ChainHandler {
     const ownerEth = this.deriveOwnerEth(adiUrl);
     const salt = deriveSafeSalt(adiUrl);
 
+    console.log(`  Deploying on NEAR Testnet...`);
+    console.log(`  Owner (bytes32): ${owner}`);
+    console.log(`  Owner (ETH): ${ownerEth}`);
+    console.log(`  ADI URL: ${adiUrl}`);
+    console.log(`  Salt: ${salt}`);
+    console.log(`  Predicted address: ${addressResult.accountAddress}`);
+
     // Use callFunctionRaw to get the full transaction outcome (callFunction only returns the contract's return value)
+    // broadcast_tx_commit waits for the tx to be included in a block
     const outcome = await sponsorAccount.callFunctionRaw({
       contractId: this.factoryAccount,
       methodName: 'create_account',
@@ -212,16 +220,64 @@ export class NearChainHandler implements ChainHandler {
     const txHash = (outcome as any)?.transaction_outcome?.id
       || (outcome as any)?.transaction?.hash
       || 'unknown';
-    const finalAddress = addressResult.accountAddress;
-    console.log(`  ✅ NEAR account deployed: ${finalAddress}`);
+
+    console.log(`  Transaction broadcast: ${txHash}`);
+
+    // Check transaction outcome for execution failures
+    const txFailure = this.extractOutcomeFailure(outcome);
+    if (txFailure) {
+      throw new Error(`NEAR deployment transaction failed on-chain: ${txFailure}`);
+    }
+
+    // Verify the account actually exists at the predicted address (matches TRON pattern)
+    const postDeploy = await this.getAccountAddress(adiUrl);
+    if (!postDeploy.isDeployed) {
+      throw new Error(
+        `NEAR deployment tx ${txHash} succeeded but account not found at ${addressResult.accountAddress}`
+      );
+    }
+
+    console.log(`  ✅ NEAR account deployed and verified: ${addressResult.accountAddress}`);
 
     return {
-      accountAddress: finalAddress,
+      accountAddress: addressResult.accountAddress,
       alreadyExisted: false,
       transactionHash: txHash,
       explorerUrl: `${EXPLORER_URL}/txns/${txHash}`,
-      message: 'Certen Abstract Account deployed successfully on NEAR Testnet'
+      message: 'Certen Abstract Account deployed and verified on NEAR Testnet'
     };
+  }
+
+  /**
+   * Extract a failure message from a NEAR transaction outcome, if any.
+   * Checks both the transaction_outcome and all receipts_outcome for failures.
+   * Returns null if the transaction succeeded.
+   */
+  private extractOutcomeFailure(outcome: any): string | null {
+    // Check top-level status (present on broadcast_tx_commit responses)
+    const topStatus = outcome?.status;
+    if (topStatus?.Failure) {
+      return JSON.stringify(topStatus.Failure);
+    }
+
+    // Check transaction_outcome
+    const txOutcome = outcome?.transaction_outcome?.outcome;
+    if (txOutcome?.status?.Failure) {
+      return JSON.stringify(txOutcome.status.Failure);
+    }
+
+    // Check all receipts_outcome for failures (cross-contract calls)
+    const receipts = outcome?.receipts_outcome;
+    if (Array.isArray(receipts)) {
+      for (const receipt of receipts) {
+        const receiptStatus = receipt?.outcome?.status;
+        if (receiptStatus?.Failure) {
+          return JSON.stringify(receiptStatus.Failure);
+        }
+      }
+    }
+
+    return null;
   }
 
   async getAddressBalance(address: string): Promise<AddressBalanceResult> {
