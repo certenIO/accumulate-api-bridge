@@ -146,6 +146,10 @@ export class TronChainHandler implements ChainHandler {
     const salt = deriveSaltU256(adiUrl);
 
     console.log(`  Deploying on TRON Shasta...`);
+    console.log(`  Owner: ${evmOwner}`);
+    console.log(`  ADI URL: ${adiUrl}`);
+    console.log(`  Deployment fee: ${feeValue} sun`);
+
     const txResult = await tronWeb.transactionBuilder.triggerSmartContract(
       this.factoryAddress,
       'createAccountIfNotExists(address,string,uint256)',
@@ -161,7 +165,25 @@ export class TronChainHandler implements ChainHandler {
     const broadcast = await tronWeb.trx.sendRawTransaction(signedTx);
     const txHash = broadcast.txid || broadcast.transaction?.txID || '';
 
-    console.log(`  ✅ TRON account deployed: ${addressResult.accountAddress}`);
+    if (!txHash) {
+      throw new Error('TRON broadcast returned no transaction hash');
+    }
+
+    console.log(`  Transaction broadcast: ${txHash}`);
+
+    // Wait for on-chain confirmation — poll getTransactionInfoById
+    const confirmed = await this.waitForConfirmation(tronWeb, txHash, 60_000);
+    if (!confirmed.success) {
+      throw new Error(`TRON deployment transaction failed on-chain: ${confirmed.error}`);
+    }
+
+    // Verify the contract actually exists at the predicted address
+    const postDeploy = await this.getAccountAddress(adiUrl);
+    if (!postDeploy.isDeployed) {
+      throw new Error(`TRON deployment tx ${txHash} succeeded but contract not found at ${addressResult.accountAddress}`);
+    }
+
+    console.log(`  ✅ TRON account deployed and verified: ${addressResult.accountAddress}`);
 
     return {
       accountAddress: addressResult.accountAddress,
@@ -170,6 +192,48 @@ export class TronChainHandler implements ChainHandler {
       explorerUrl: `${EXPLORER_URL}/#/transaction/${txHash}`,
       message: 'Certen Abstract Account deployed successfully on TRON Shasta Testnet'
     };
+  }
+
+  /** Poll getTransactionInfoById until the tx is confirmed or timeout */
+  private async waitForConfirmation(
+    tronWeb: any,
+    txHash: string,
+    timeoutMs: number
+  ): Promise<{ success: boolean; error?: string }> {
+    const deadline = Date.now() + timeoutMs;
+    const pollInterval = 3000;
+
+    while (Date.now() < deadline) {
+      try {
+        const info = await tronWeb.trx.getTransactionInfo(txHash);
+
+        // If blockNumber is present, tx is confirmed
+        if (info && info.blockNumber) {
+          // Check receipt result
+          if (info.receipt?.result === 'OUT_OF_ENERGY') {
+            return { success: false, error: 'OUT_OF_ENERGY' };
+          }
+          if (info.receipt?.result === 'FAILED') {
+            return { success: false, error: 'Transaction reverted on-chain' };
+          }
+          if (info.result === 'FAILED') {
+            const reason = info.resMessage
+              ? Buffer.from(info.resMessage, 'hex').toString('utf8')
+              : 'Unknown revert reason';
+            return { success: false, error: reason };
+          }
+          // SUCCESS or no explicit failure = confirmed
+          console.log(`  Confirmed in block ${info.blockNumber}`);
+          return { success: true };
+        }
+      } catch {
+        // Not yet available, keep polling
+      }
+
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+    }
+
+    return { success: false, error: `Transaction ${txHash} not confirmed after ${timeoutMs}ms` };
   }
 
   async getAddressBalance(address: string): Promise<AddressBalanceResult> {
