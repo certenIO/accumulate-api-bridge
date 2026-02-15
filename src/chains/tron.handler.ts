@@ -157,12 +157,12 @@ export class TronChainHandler implements ChainHandler {
     console.log(`  Owner (TRON base58): ${ownerBase58}`);
     console.log(`  ADI URL: ${adiUrl}`);
     console.log(`  Deployment fee: ${feeValue} sun`);
-    console.log(`  Fee limit: 1000 TRX`);
+    console.log(`  Fee limit: 5000 TRX`);
 
     const txResult = await tronWeb.transactionBuilder.triggerSmartContract(
       this.factoryAddress,
       'createAccountIfNotExists(address,string,uint256)',
-      { callValue: feeValue, feeLimit: 1000000000 },
+      { callValue: feeValue, feeLimit: 5000000000 },
       [
         { type: 'address', value: ownerTronHex },
         { type: 'string', value: adiUrl },
