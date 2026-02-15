@@ -9,6 +9,12 @@ import { ethers } from 'ethers';
 import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult, ChainConfig } from './types.js';
 import { deriveEvmOwner, deriveSaltU256 } from './utils.js';
 
+// Infura API key from environment — never hardcode secrets in source
+const INFURA_API_KEY = process.env.INFURA_API_KEY || '';
+function infuraUrl(network: string): string {
+  return `https://${network}.infura.io/v3/${INFURA_API_KEY}`;
+}
+
 // CertenAccountFactory ABI (minimal - only what we need)
 const ACCOUNT_FACTORY_ABI = [
   {
@@ -241,7 +247,7 @@ const V5_FACTORY = '0x2e6037afFA783d487664b2440c691fc86Bc18A17';
 const SEPOLIA_CONFIG: ChainConfig = {
   chainId: 'sepolia',
   name: 'Ethereum Sepolia',
-  rpcUrl: process.env.EVM_SEPOLIA_RPC_URL || 'https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  rpcUrl: process.env.EVM_SEPOLIA_RPC_URL || infuraUrl('sepolia'),
   factoryAddress: process.env.EVM_SEPOLIA_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://sepolia.etherscan.io'
 };
@@ -249,7 +255,7 @@ const SEPOLIA_CONFIG: ChainConfig = {
 const ARBITRUM_SEPOLIA_CONFIG: ChainConfig = {
   chainId: 'arbitrum-sepolia',
   name: 'Arbitrum Sepolia',
-  rpcUrl: process.env.EVM_ARBITRUM_SEPOLIA_RPC_URL || 'https://arbitrum-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  rpcUrl: process.env.EVM_ARBITRUM_SEPOLIA_RPC_URL || infuraUrl('arbitrum-sepolia'),
   factoryAddress: process.env.EVM_ARBITRUM_SEPOLIA_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://sepolia.arbiscan.io'
 };
@@ -257,7 +263,7 @@ const ARBITRUM_SEPOLIA_CONFIG: ChainConfig = {
 const BASE_SEPOLIA_CONFIG: ChainConfig = {
   chainId: 'base-sepolia',
   name: 'Base Sepolia',
-  rpcUrl: process.env.EVM_BASE_SEPOLIA_RPC_URL || 'https://base-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  rpcUrl: process.env.EVM_BASE_SEPOLIA_RPC_URL || infuraUrl('base-sepolia'),
   factoryAddress: process.env.EVM_BASE_SEPOLIA_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://sepolia-explorer.base.org'
 };
@@ -273,7 +279,7 @@ const BSC_TESTNET_CONFIG: ChainConfig = {
 const OPTIMISM_SEPOLIA_CONFIG: ChainConfig = {
   chainId: 'optimism-sepolia',
   name: 'Optimism Sepolia',
-  rpcUrl: process.env.EVM_OPTIMISM_SEPOLIA_RPC_URL || 'https://optimism-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a',
+  rpcUrl: process.env.EVM_OPTIMISM_SEPOLIA_RPC_URL || infuraUrl('optimism-sepolia'),
   factoryAddress: process.env.EVM_OPTIMISM_SEPOLIA_ACCOUNT_FACTORY || V5_FACTORY,
   explorerUrl: 'https://sepolia-optimistic.etherscan.io'
 };
