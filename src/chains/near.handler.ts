@@ -209,6 +209,7 @@ export class NearChainHandler implements ChainHandler {
       methodName: 'create_account',
       args: {
         owner,
+        owner_eth: ownerEth,
         owner_eth_hex: ownerEth,
         adi_url: adiUrl,
         salt,
