@@ -172,7 +172,7 @@ export class TronChainHandler implements ChainHandler {
     console.log(`  Transaction broadcast: ${txHash}`);
 
     // Wait for on-chain confirmation — poll getTransactionInfoById
-    const confirmed = await this.waitForConfirmation(tronWeb, txHash, 60_000);
+    const confirmed = await this.waitForConfirmation(tronWeb, txHash, 120_000);
     if (!confirmed.success) {
       throw new Error(`TRON deployment transaction failed on-chain: ${confirmed.error}`);
     }
