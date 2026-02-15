@@ -145,10 +145,13 @@ export class TronChainHandler implements ChainHandler {
     const ownerTronHex = tronWeb.address.toHex(evmOwner);
     const salt = deriveSaltU256(adiUrl);
 
+    const ownerBase58 = tronWeb.address.fromHex(ownerTronHex);
     console.log(`  Deploying on TRON Shasta...`);
-    console.log(`  Owner: ${evmOwner}`);
+    console.log(`  Owner (EVM): ${evmOwner}`);
+    console.log(`  Owner (TRON): ${ownerBase58}`);
     console.log(`  ADI URL: ${adiUrl}`);
     console.log(`  Deployment fee: ${feeValue} sun`);
+    console.log(`  Fee limit: 1000 TRX`);
 
     const txResult = await tronWeb.transactionBuilder.triggerSmartContract(
       this.factoryAddress,
