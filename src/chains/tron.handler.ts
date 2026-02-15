@@ -87,10 +87,15 @@ export class TronChainHandler implements ChainHandler {
     return hexResult.replace(/^0+/, '') === '1';
   }
 
+  /** Convert EVM 0x address to TRON 41-prefixed hex */
+  private evmToTronHex(evmAddress: string): string {
+    return '41' + evmAddress.slice(2).toLowerCase();
+  }
+
   async getAccountAddress(adiUrl: string): Promise<AccountAddressResult> {
     const tronWeb = await this.createTronWeb();
     const evmOwner = deriveEvmOwner(adiUrl);
-    const ownerTronHex = tronWeb.address.toHex(evmOwner);
+    const ownerTronHex = this.evmToTronHex(evmOwner);
     const salt = deriveSaltU256(adiUrl);
 
     // Call getAddress(address,string,uint256)
@@ -142,13 +147,14 @@ export class TronChainHandler implements ChainHandler {
 
     // Deploy via triggerSmartContract
     const evmOwner = deriveEvmOwner(adiUrl);
-    const ownerTronHex = tronWeb.address.toHex(evmOwner);
+    const ownerTronHex = this.evmToTronHex(evmOwner);
+    const ownerBase58 = tronWeb.address.fromHex(ownerTronHex);
     const salt = deriveSaltU256(adiUrl);
 
-    const ownerBase58 = tronWeb.address.fromHex(ownerTronHex);
     console.log(`  Deploying on TRON Shasta...`);
     console.log(`  Owner (EVM): ${evmOwner}`);
-    console.log(`  Owner (TRON): ${ownerBase58}`);
+    console.log(`  Owner (TRON hex): ${ownerTronHex}`);
+    console.log(`  Owner (TRON base58): ${ownerBase58}`);
     console.log(`  ADI URL: ${adiUrl}`);
     console.log(`  Deployment fee: ${feeValue} sun`);
     console.log(`  Fee limit: 1000 TRX`);
