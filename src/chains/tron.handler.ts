@@ -33,7 +33,7 @@ export class TronChainHandler implements ChainHandler {
   private rpcUrl: string;
 
   constructor() {
-    this.factoryAddress = process.env.TRON_FACTORY_ADDRESS || 'TWBh1qjpABrxVSnUDnp4zcsSnpfAeRhJwy';
+    this.factoryAddress = process.env.TRON_FACTORY_ADDRESS || 'TE1A3RgQ4b3aqdFQD9bUGMPpP7gjaudQJM';
     this.rpcUrl = process.env.TRON_SHASTA_RPC_URL || 'https://api.shasta.trongrid.io';
   }
 
