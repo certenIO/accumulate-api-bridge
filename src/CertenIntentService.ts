@@ -2,6 +2,35 @@ import { Logger } from './Logger.js';
 import { AccumulateService } from './AccumulateService.js';
 import crypto from 'crypto';
 
+// Native token decimals per chain (EVM defaults to 18)
+const CHAIN_DECIMALS: Record<string, number> = {
+  'tron': 6, 'tron mainnet': 6, 'tron-mainnet': 6,
+  'tron shasta': 6, 'tron-shasta': 6, 'tron shasta testnet': 6, 'tron-testnet': 6, 'tron testnet': 6,
+  'solana': 9, 'solana-mainnet': 9, 'solana-testnet': 9, 'solana-devnet': 9,
+  'near': 24, 'near-mainnet': 24, 'near-testnet': 24,
+};
+
+function getChainDecimals(chain: string): number {
+  return CHAIN_DECIMALS[chain.toLowerCase()] ?? 18;
+}
+
+function getChainSymbol(chain: string): string {
+  const lower = chain.toLowerCase();
+  if (lower.includes('tron')) return 'TRX';
+  if (lower.includes('solana')) return 'SOL';
+  if (lower.includes('near')) return 'NEAR';
+  return 'ETH';
+}
+
+/** Convert a human-readable amount to base units for the given chain decimals */
+function convertToBaseUnits(amount: string, decimals: number): string {
+  const amountStr = amount.toString();
+  const [integerPart, decimalPart = ''] = amountStr.split('.');
+  const paddedDecimal = decimalPart.padEnd(decimals, '0').slice(0, decimals);
+  const baseUnitsString = integerPart + paddedDecimal;
+  return BigInt(baseUnitsString).toString();
+}
+
 // Certen Transaction Intent Interface
 export interface CertenTransactionIntent {
   id: string;
@@ -448,8 +477,8 @@ export class CertenIntentService {
       "chainId": leg.chainId,
       "network": leg.chain.toLowerCase(),
       "asset": {
-        "symbol": leg.tokenSymbol || "ETH",
-        "decimals": 18,
+        "symbol": leg.tokenSymbol || getChainSymbol(leg.chain),
+        "decimals": getChainDecimals(leg.chain),
         "native": !leg.tokenAddress,
         "contract_address": leg.tokenAddress || null,
         "verified": true
@@ -457,7 +486,7 @@ export class CertenIntentService {
       "from": leg.fromAddress,
       "to": leg.toAddress,
       "amountEth": leg.amount,
-      "amountWei": leg.amountWei || this.convertEthToWei(leg.amount),
+      "amountWei": leg.amountWei || convertToBaseUnits(leg.amount, getChainDecimals(leg.chain)),
       "sequence_order": leg.sequenceOrder ?? index,
       "depends_on_legs": leg.dependsOnLegs || [],
       "max_retries": leg.maxRetries || 3,
@@ -795,7 +824,8 @@ export class CertenIntentService {
     };
 
     // data[1]: crossChainData - Protocol v1.0 legs model
-    const amountWei = this.convertEthToWei(intent.amount);
+    const chainDecimals = getChainDecimals(intent.toChain);
+    const amountWei = convertToBaseUnits(intent.amount, chainDecimals);
     const legId = `leg-${intent.toChain.toLowerCase()}-${intent.toChainId || 11155111}-1`;
 
     const crossChainData = {
@@ -810,11 +840,11 @@ export class CertenIntentService {
           "chainId": intent.toChainId || 11155111,
           "network": intent.toChain.toLowerCase(),
           "asset": {
-            "symbol": intent.tokenSymbol || "ETH",
-            "decimals": 18,
+            "symbol": intent.tokenSymbol || getChainSymbol(intent.toChain),
+            "decimals": chainDecimals,
             "native": !intent.tokenAddress,
-            "contract_address": intent.tokenAddress || null, // MISSING: token contract (null for native ETH)
-            "verified": true                               // MISSING: asset verification status
+            "contract_address": intent.tokenAddress || null,
+            "verified": true
           },
           "from": intent.fromAddress,
           "to": intent.toAddress,

@@ -18,6 +18,33 @@ import { CertenIntentService, CreateIntentRequest, CreateMultiLegIntentRequest, 
 import { getChainHandler, getAllChainHandlers, getRegisteredChainIds } from './chains/index.js';
 import { VALIDATOR_ADDRESSES, CHAIN_HANDLER_IDS, NON_EVM_CHAINS } from './chains/validator-addresses.js';
 
+// Native token decimals per chain (EVM defaults to 18)
+const CHAIN_DECIMALS: Record<string, number> = {
+  'tron': 6, 'tron mainnet': 6, 'tron-mainnet': 6,
+  'tron shasta': 6, 'tron-shasta': 6, 'tron shasta testnet': 6, 'tron-testnet': 6, 'tron testnet': 6,
+  'solana': 9, 'solana-mainnet': 9, 'solana-testnet': 9, 'solana-devnet': 9,
+  'near': 24, 'near-mainnet': 24, 'near-testnet': 24,
+};
+
+function getChainDecimals(chain: string): number {
+  return CHAIN_DECIMALS[chain.toLowerCase()] ?? 18;
+}
+
+function getChainSymbol(chain: string): string {
+  const lower = chain.toLowerCase();
+  if (lower.includes('tron')) return 'TRX';
+  if (lower.includes('solana')) return 'SOL';
+  if (lower.includes('near')) return 'NEAR';
+  return 'ETH';
+}
+
+function convertToBaseUnits(amount: string, decimals: number): string {
+  const amountStr = amount.toString();
+  const [integerPart, decimalPart = ''] = amountStr.split('.');
+  const paddedDecimal = decimalPart.padEnd(decimals, '0').slice(0, decimals);
+  return BigInt(integerPart + paddedDecimal).toString();
+}
+
 // Load environment variables first
 dotenv.config();
 
@@ -1775,8 +1802,9 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
     const expiresAtSeconds = nowSeconds + (expirationMins * 60);
     const nonce = `certen_${nowMs}_${Math.random().toString(36).substring(7)}`;
 
-    // Convert amount to Wei (18 decimals)
-    const amountWei = (parseFloat(intent.amount) * 1e18).toString();
+    // Convert amount to base units using chain-specific decimals
+    const chainDecimals = getChainDecimals(intent.toChain || 'ethereum');
+    const amountWei = convertToBaseUnits(intent.amount, chainDecimals);
     const legId = `leg-${(intent.toChain || 'ethereum').toLowerCase()}-${intent.toChainId || 11155111}-1`;
 
     // data[0]: intentData - Protocol metadata, proof_class, descriptions
@@ -1822,8 +1850,8 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
           chainId: intent.toChainId || 11155111,
           network: (intent.toChain || "sepolia").toLowerCase(),
           asset: {
-            symbol: intent.tokenSymbol || "ETH",
-            decimals: 18,
+            symbol: intent.tokenSymbol || getChainSymbol(intent.toChain || 'ethereum'),
+            decimals: chainDecimals,
             native: !intent.tokenAddress,
             contract_address: intent.tokenAddress || null,
             verified: true
