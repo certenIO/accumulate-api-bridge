@@ -153,7 +153,7 @@ export class TronChainHandler implements ChainHandler {
     const txResult = await tronWeb.transactionBuilder.triggerSmartContract(
       this.factoryAddress,
       'createAccountIfNotExists(address,string,uint256)',
-      { callValue: feeValue, feeLimit: 300000000 },
+      { callValue: feeValue, feeLimit: 1000000000 },
       [
         { type: 'address', value: ownerTronHex },
         { type: 'string', value: adiUrl },
