@@ -141,11 +141,7 @@ export class TronChainHandler implements ChainHandler {
       };
     }
 
-    // Get deployment fee
-    const feeResult = await this.callView(tronWeb, 'deploymentFee()', []);
-    const feeValue = parseInt(feeResult, 16);
-
-    // Deploy via triggerSmartContract
+    // Derive parameters
     const evmOwner = deriveEvmOwner(adiUrl);
     const ownerTronHex = this.evmToTronHex(evmOwner);
     const ownerBase58 = tronWeb.address.fromHex(ownerTronHex);
@@ -156,7 +152,64 @@ export class TronChainHandler implements ChainHandler {
     console.log(`  Owner (TRON hex): ${ownerTronHex}`);
     console.log(`  Owner (TRON base58): ${ownerBase58}`);
     console.log(`  ADI URL: ${adiUrl}`);
-    console.log(`  Deployment fee: ${feeValue} sun`);
+    console.log(`  Salt: ${salt.toString()}`);
+
+    // Pre-flight diagnostics: query factory state before deploying
+    const pausedResult = await this.callView(tronWeb, 'isDeploymentPaused()', []);
+    const isPaused = this.parseBoolResult(pausedResult);
+    console.log(`  Factory paused: ${isPaused}`);
+    if (isPaused) {
+      throw new Error('TRON factory deployment is paused');
+    }
+
+    const adiRegisteredResult = await this.callView(tronWeb, 'isADIRegistered(string)', [
+      { type: 'string', value: adiUrl },
+    ]);
+    const isAdiRegistered = this.parseBoolResult(adiRegisteredResult);
+    console.log(`  ADI already registered: ${isAdiRegistered}`);
+    if (isAdiRegistered) {
+      const existingResult = await this.callView(tronWeb, 'getAccountForADI(string)', [
+        { type: 'string', value: adiUrl },
+      ]);
+      const existingAddr = this.parseAddressResult(tronWeb, existingResult);
+      throw new Error(`ADI URL "${adiUrl}" is already registered to account ${existingAddr}`);
+    }
+
+    // Get factory config: entryPoint, anchorContractV2, deploymentFee, owner
+    const configResult = await this.callView(tronWeb, 'getFactoryConfig()', []);
+    // ABI decode: 4 x 32-byte words (address, address, uint256, address)
+    const entryPointHex = configResult.slice(24, 64);
+    const anchorHex = configResult.slice(88, 128);
+    const feeHex = configResult.slice(128, 192);
+    const ownerHex = configResult.slice(216, 256);
+    console.log(`  Factory entryPoint: 41${entryPointHex}`);
+    console.log(`  Factory anchorContract: 41${anchorHex}`);
+    console.log(`  Factory owner: 41${ownerHex}`);
+
+    const feeValue = parseInt(feeHex, 16);
+    console.log(`  Deployment fee: ${feeValue} sun (${feeValue / 1e6} TRX)`);
+
+    // Simulate the call first via triggerConstantContract to catch reverts early
+    console.log(`  Simulating createAccountIfNotExists...`);
+    const simResult = await tronWeb.transactionBuilder.triggerConstantContract(
+      this.factoryAddress,
+      'createAccountIfNotExists(address,string,uint256)',
+      { callValue: feeValue },
+      [
+        { type: 'address', value: ownerTronHex },
+        { type: 'string', value: adiUrl },
+        { type: 'uint256', value: salt.toString() },
+      ]
+    );
+    if (simResult?.result?.result === false || simResult?.result?.code) {
+      const errMsg = simResult?.result?.message
+        ? Buffer.from(simResult.result.message, 'hex').toString('utf8')
+        : `code=${simResult?.result?.code}, raw=${JSON.stringify(simResult?.result)}`;
+      console.error(`  Simulation FAILED: ${errMsg}`);
+      console.error(`  Full simulation result: ${JSON.stringify(simResult, null, 2)}`);
+      throw new Error(`TRON deployment simulation failed: ${errMsg}`);
+    }
+    console.log(`  Simulation passed — proceeding with real transaction`);
     console.log(`  Fee limit: 5000 TRX`);
 
     const txResult = await tronWeb.transactionBuilder.triggerSmartContract(
@@ -223,12 +276,19 @@ export class TronChainHandler implements ChainHandler {
             return { success: false, error: 'OUT_OF_ENERGY' };
           }
           if (info.receipt?.result === 'FAILED') {
-            return { success: false, error: 'Transaction reverted on-chain' };
+            const reason = info.resMessage
+              ? Buffer.from(info.resMessage, 'hex').toString('utf8')
+              : info.contractResult?.[0]
+                ? `revert data: ${info.contractResult[0]}`
+                : 'Transaction reverted on-chain (no reason)';
+            console.error(`  Full tx info: ${JSON.stringify(info, null, 2)}`);
+            return { success: false, error: `FAILED: ${reason}` };
           }
           if (info.result === 'FAILED') {
             const reason = info.resMessage
               ? Buffer.from(info.resMessage, 'hex').toString('utf8')
               : 'Unknown revert reason';
+            console.error(`  Full tx info: ${JSON.stringify(info, null, 2)}`);
             return { success: false, error: reason };
           }
           // SUCCESS or no explicit failure = confirmed
