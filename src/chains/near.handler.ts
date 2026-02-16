@@ -214,7 +214,7 @@ export class NearChainHandler implements ChainHandler {
         salt,
       },
       gas: BigInt('300000000000000'), // 300 TGas (max — create_account does CPI)
-      deposit: BigInt('5000000000000000000000000'), // 5 NEAR for sub-account creation + storage
+      deposit: BigInt('10000000000000000000000000'), // 10 NEAR (8 NEAR storage + 0.5 fee + headroom)
     } as any);
 
     const txHash = (outcome as any)?.transaction_outcome?.id
