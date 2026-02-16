@@ -283,14 +283,19 @@ export class SolanaChainHandler implements ChainHandler {
     const txHash = await connection.sendRawTransaction(tx.serialize());
     await connection.confirmTransaction(txHash, 'confirmed');
 
-    console.log(`  ✅ Solana account deployed: ${accountPDA.toBase58()}`);
+    // Post-deploy verification: confirm account actually exists on-chain
+    const verifyInfo = await connection.getAccountInfo(accountPDA, 'confirmed');
+    if (!verifyInfo) {
+      throw new Error(`Account deployment TX confirmed but account ${accountPDA.toBase58()} not found on-chain`);
+    }
+    console.log(`  ✅ Solana account deployed and verified: ${accountPDA.toBase58()} (${verifyInfo.space} bytes)`);
 
     return {
       accountAddress: accountPDA.toBase58(),
       alreadyExisted: false,
       transactionHash: txHash,
       explorerUrl: `${EXPLORER_URL}/tx/${txHash}?cluster=devnet`,
-      message: 'Certen Abstract Account deployed successfully on Solana Devnet'
+      message: 'Certen Abstract Account deployed and verified on Solana Devnet'
     };
   }
 
