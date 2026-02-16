@@ -288,7 +288,7 @@ export class SolanaChainHandler implements ChainHandler {
     if (!verifyInfo) {
       throw new Error(`Account deployment TX confirmed but account ${accountPDA.toBase58()} not found on-chain`);
     }
-    console.log(`  ✅ Solana account deployed and verified: ${accountPDA.toBase58()} (${verifyInfo.space} bytes)`);
+    console.log(`  ✅ Solana account deployed and verified: ${accountPDA.toBase58()} (${verifyInfo.data.length} bytes)`);
 
     return {
       accountAddress: accountPDA.toBase58(),
