@@ -29,6 +29,7 @@ const SEED_ADI_REGISTRY = Buffer.from('adi_registry');
 const SEED_DEPLOYED_ACCOUNT = Buffer.from('deployed_account');
 const SEED_FEE_VAULT = Buffer.from('fee_vault');
 const SEED_CERTEN_ACCOUNT = Buffer.from('certen_account');
+const SEED_ACCOUNT_VAULT = Buffer.from('account_vault');
 const SEED_USER_ROLE = Buffer.from('user_role');
 
 /**
@@ -130,6 +131,17 @@ export class SolanaChainHandler implements ChainHandler {
   }
 
   /**
+   * Compute the Vault PDA that holds actual SOL for this account.
+   * Seeds: ["account_vault", accountStatePDA] in the CertenAccount program.
+   */
+  private computeVaultPDA(accountPDA: PublicKey): [PublicKey, number] {
+    return PublicKey.findProgramAddressSync(
+      [SEED_ACCOUNT_VAULT, accountPDA.toBuffer()],
+      this.accountProgramId
+    );
+  }
+
+  /**
    * Compute the owner role PDA.
    * Seeds: ["user_role", accountStatePDA, ownerPubkey] in the CertenAccount program.
    */
@@ -188,16 +200,20 @@ export class SolanaChainHandler implements ChainHandler {
   async getAccountAddress(adiUrl: string): Promise<AccountAddressResult> {
     const ownerKeypair = this.deriveOwnerKeypair(adiUrl);
     const [accountPDA] = this.computeAccountPDA(ownerKeypair.publicKey);
+    const [vaultPDA] = this.computeVaultPDA(accountPDA);
     const connection = this.getConnection();
 
     // Check if account exists on-chain
     const accountInfo = await connection.getAccountInfo(accountPDA);
     const isDeployed = accountInfo !== null;
 
+    // Return the Vault PDA as the user's wallet address — this is where SOL lives
+    // and where governance operations transfer from. The Account State PDA stores
+    // governance config but doesn't hold user funds.
     return {
-      accountAddress: accountPDA.toBase58(),
+      accountAddress: vaultPDA.toBase58(),
       isDeployed,
-      explorerUrl: `${EXPLORER_URL}/account/${accountPDA.toBase58()}?cluster=devnet`
+      explorerUrl: `${EXPLORER_URL}/account/${vaultPDA.toBase58()}?cluster=devnet`
     };
   }
 
@@ -210,18 +226,19 @@ export class SolanaChainHandler implements ChainHandler {
     const ownerKeypair = this.deriveOwnerKeypair(adiUrl);
     const ownerPubkey = ownerKeypair.publicKey;
 
-    // Compute account PDA
+    // Compute account PDA and vault PDA
     const [accountPDA] = this.computeAccountPDA(ownerPubkey);
+    const [vaultPDA] = this.computeVaultPDA(accountPDA);
     const connection = this.getConnection();
 
     // Check if already deployed
     const accountInfo = await connection.getAccountInfo(accountPDA);
     if (accountInfo !== null) {
       return {
-        accountAddress: accountPDA.toBase58(),
+        accountAddress: vaultPDA.toBase58(),
         alreadyExisted: true,
         transactionHash: null,
-        explorerUrl: `${EXPLORER_URL}/account/${accountPDA.toBase58()}?cluster=devnet`,
+        explorerUrl: `${EXPLORER_URL}/account/${vaultPDA.toBase58()}?cluster=devnet`,
         message: 'Certen Abstract Account already exists at this address'
       };
     }
@@ -289,9 +306,10 @@ export class SolanaChainHandler implements ChainHandler {
       throw new Error(`Account deployment TX confirmed but account ${accountPDA.toBase58()} not found on-chain`);
     }
     console.log(`  ✅ Solana account deployed and verified: ${accountPDA.toBase58()} (${verifyInfo.data.length} bytes)`);
+    console.log(`  ✅ Vault PDA (user wallet): ${vaultPDA.toBase58()}`);
 
     return {
-      accountAddress: accountPDA.toBase58(),
+      accountAddress: vaultPDA.toBase58(),
       alreadyExisted: false,
       transactionHash: txHash,
       explorerUrl: `${EXPLORER_URL}/tx/${txHash}?cluster=devnet`,
