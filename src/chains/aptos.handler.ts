@@ -20,7 +20,7 @@ export class AptosChainHandler implements ChainHandler {
   private rpcUrl: string;
 
   constructor() {
-    this.factoryPackage = process.env.APTOS_FACTORY_PACKAGE || '0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894';
+    this.factoryPackage = process.env.APTOS_FACTORY_PACKAGE || '0xe4ea6152bffec3ece1bf885f5ba571649436bf33816e2d210b0f5d91669da05a';
     this.rpcUrl = process.env.APTOS_TESTNET_RPC_URL || 'https://fullnode.testnet.aptoslabs.com/v1';
   }
 
