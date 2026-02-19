@@ -64,6 +64,16 @@ export class SuiChainHandler implements ChainHandler {
         sender: '0x0000000000000000000000000000000000000000000000000000000000000000',
       });
 
+      // If the devInspect execution failed (e.g. ADI not registered yet), fall back
+      const execStatus = (result as any)?.effects?.status?.status;
+      if (execStatus === 'failure') {
+        return {
+          accountAddress: ownerHex,
+          isDeployed: false,
+          explorerUrl: `${EXPLORER_URL}/object/${ownerHex}`
+        };
+      }
+
       let predictedAddress = ownerHex; // fallback
       if ((result as any)?.results?.[0]?.returnValues?.[0]) {
         const [bytesArr] = (result as any).results[0].returnValues[0];
@@ -165,6 +175,7 @@ export class SuiChainHandler implements ChainHandler {
     const result = await client.signAndExecuteTransaction({
       signer: keypair,
       transaction: tx,
+      options: { showEvents: true },
     });
 
     const digest = (result as any).digest || (result as any).Transaction?.digest || '';
@@ -172,7 +183,24 @@ export class SuiChainHandler implements ChainHandler {
       await client.waitForTransaction({ digest });
     }
 
-    const finalAddress = addressResult.accountAddress;
+    // Extract the real account object ID from the AccountDeployedEvent.
+    // On SUI, object IDs are assigned by the runtime (not deterministic like CREATE2),
+    // so we must read the actual ID from the event or re-query the factory registry.
+    let finalAddress = '';
+    const events = (result as any).events || [];
+    for (const evt of events) {
+      if (evt.type?.includes('AccountDeployedEvent') && evt.parsedJson?.account_id) {
+        finalAddress = evt.parsedJson.account_id;
+        break;
+      }
+    }
+
+    // Fallback: re-query get_address now that the factory registry is populated
+    if (!finalAddress) {
+      const postDeployResult = await this.getAccountAddress(adiUrl);
+      finalAddress = postDeployResult.accountAddress;
+    }
+
     console.log(`  ✅ Sui account deployed: ${finalAddress}`);
 
     return {
