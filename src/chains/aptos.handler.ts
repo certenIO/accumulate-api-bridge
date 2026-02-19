@@ -5,6 +5,7 @@
  * Factory package: CertenAccountFactory on Aptos Testnet.
  */
 
+import { createHash } from 'crypto';
 import { Aptos, AptosConfig, Network, Account, Ed25519PrivateKey, MoveVector, MoveString } from '@aptos-labs/ts-sdk';
 import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult } from './types.js';
 import { deriveOwnerBytes32, deriveSaltU64 } from './utils.js';
@@ -37,6 +38,47 @@ export class AptosChainHandler implements ChainHandler {
     return new Aptos(config);
   }
 
+  /**
+   * Compute the factory-derived resource account address locally.
+   * Replicates the Move logic: seed = BCS(owner) + adi_url + BCS(salt) + BCS(anchor_contract)
+   * address = SHA3-256(deployer + seed + 0xFF)
+   */
+  private async computeAddressLocally(adiUrl: string, ownerHex: string, salt: bigint): Promise<string> {
+    // Fetch FactoryState resource to get deployer_address and anchor_contract
+    const resourceType = `${this.factoryPackage}::certen_account_factory::FactoryState`;
+    const url = `${this.rpcUrl.replace(/\/v1\/?$/, '')}/v1/accounts/${this.factoryPackage}/resource/${resourceType}`;
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      throw new Error(`Failed to fetch FactoryState: ${resp.status} ${await resp.text()}`);
+    }
+    const resource = await resp.json() as { data: { deployer_address: string; anchor_contract: string } };
+    const deployerAddr = resource.data.deployer_address;
+    const anchorContract = resource.data.anchor_contract;
+
+    // Decode hex addresses to bytes (pad to 32 bytes)
+    const hexToBytes32 = (hex: string): Uint8Array => {
+      const clean = hex.replace(/^0x/, '').padStart(64, '0');
+      return Buffer.from(clean, 'hex');
+    };
+
+    const deployerBytes = hexToBytes32(deployerAddr);
+    const ownerBytes = hexToBytes32(ownerHex);
+    const anchorBytes = hexToBytes32(anchorContract);
+    const adiUrlBytes = Buffer.from(adiUrl, 'utf-8');
+
+    // BCS encode salt as u64 little-endian
+    const saltBytes = Buffer.alloc(8);
+    saltBytes.writeBigUInt64LE(salt);
+
+    // Build seed: BCS(owner) + adi_url + BCS(salt) + BCS(anchor_contract)
+    const seed = Buffer.concat([ownerBytes, adiUrlBytes, saltBytes, anchorBytes]);
+
+    // create_resource_address: SHA3-256(deployer + seed + 0xFF)
+    const data = Buffer.concat([deployerBytes, seed, Buffer.from([0xFF])]);
+    const hash = createHash('sha3-256').update(data).digest();
+    return '0x' + hash.toString('hex');
+  }
+
   async getAccountAddress(adiUrl: string): Promise<AccountAddressResult> {
     const aptos = this.getClient();
     const ownerHex = '0x' + deriveOwnerBytes32(adiUrl);
@@ -56,13 +98,14 @@ export class AptosChainHandler implements ChainHandler {
 
       const predictedAddress = result[0] as string;
 
-      // Check if the account exists on-chain
+      // Check if the abstract account is initialized (has AccountState resource)
       let isDeployed = false;
       try {
-        await aptos.getAccountInfo({ accountAddress: predictedAddress });
+        const resourceType = `${this.factoryPackage}::certen_account_v2::AccountState` as `${string}::${string}::${string}`;
+        await aptos.getAccountResource({ accountAddress: predictedAddress, resourceType });
         isDeployed = true;
       } catch {
-        // Account doesn't exist yet
+        // AccountState resource doesn't exist yet
       }
 
       return {
@@ -71,9 +114,11 @@ export class AptosChainHandler implements ChainHandler {
         explorerUrl: `${EXPLORER_URL}/account/${predictedAddress}?network=testnet`
       };
     } catch (err) {
-      // If the view function fails, compute address locally as fallback
-      const ownerBytes = deriveOwnerBytes32(adiUrl);
-      const localAddress = '0x' + ownerBytes; // simplified fallback
+      // If the view function fails, compute address locally using the same
+      // derivation as the Move contract: seed = BCS(owner) + adi_url + BCS(salt) + BCS(anchor_contract)
+      // address = SHA3-256(deployer + seed + 0xFF)
+      console.warn(`  ⚠️ Aptos view function failed, computing address locally: ${err}`);
+      const localAddress = await this.computeAddressLocally(adiUrl, ownerHex, salt);
       return {
         accountAddress: localAddress,
         isDeployed: false,
