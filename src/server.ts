@@ -3635,6 +3635,61 @@ app.get('/api/v1/chain/account-address', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/chain/wallet-balance
+ *
+ * Returns the native token balance for an address on any supported chain.
+ * For Certen Abstract Accounts, returns the contract's internal balance.
+ *
+ * Query params:
+ * - address: The on-chain address or object ID
+ * - chainId: The target blockchain (e.g., "sui-testnet", "aptos-testnet")
+ */
+app.get('/api/v1/chain/wallet-balance', async (req, res) => {
+  console.log('\n💰 GET /api/v1/chain/wallet-balance');
+
+  try {
+    const { address, chainId } = req.query;
+
+    if (!address || !chainId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required query params: address, chainId'
+      });
+    }
+
+    const addressStr = address as string;
+    const chainIdStr = chainId as string;
+
+    const handler = getChainHandler(chainIdStr);
+    if (!handler) {
+      return res.status(400).json({
+        success: false,
+        error: `Unsupported chain: ${chainIdStr}`
+      });
+    }
+
+    const result = await handler.getAddressBalance(addressStr);
+
+    console.log(`  Chain: ${handler.chainName}`);
+    console.log(`  Address: ${addressStr}`);
+    console.log(`  Balance: ${result.balance} ${result.symbol}`);
+
+    res.json({
+      success: true,
+      chainId: chainIdStr,
+      ...result
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get wallet balance:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
  * GET /api/v1/chain/sponsor-status
  *
  * Returns the status of sponsor wallets across all supported chains.
