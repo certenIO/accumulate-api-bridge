@@ -215,6 +215,32 @@ export class SuiChainHandler implements ChainHandler {
   async getAddressBalance(address: string): Promise<AddressBalanceResult> {
     try {
       const client = this.getClient();
+
+      // CertenAccountV2 stores SUI internally in its sui_balance field.
+      // Query it via the contract's get_balance view function.
+      try {
+        const tx = new Transaction();
+        tx.moveCall({
+          target: `${this.factoryPackage}::certen_account_v2::get_balance`,
+          arguments: [tx.object(address)],
+        });
+        const inspectResult = await client.devInspectTransactionBlock({
+          transactionBlock: tx as any,
+          sender: '0x0000000000000000000000000000000000000000000000000000000000000000',
+        });
+        if ((inspectResult as any)?.results?.[0]?.returnValues?.[0]) {
+          const [balBytes] = (inspectResult as any).results[0].returnValues[0];
+          if (Array.isArray(balBytes) && balBytes.length === 8) {
+            const balanceMist = Buffer.from(balBytes).readBigUInt64LE();
+            const balanceSui = Number(balanceMist) / 1e9;
+            return { address, balance: balanceSui.toFixed(6), symbol: 'SUI' };
+          }
+        }
+      } catch {
+        // Not a CertenAccountV2 or devInspect failed — fall through to native balance
+      }
+
+      // Fallback: check native coin balance (for regular addresses)
       const balance = await client.getBalance({ owner: address });
       const balanceSui = Number((balance as any).totalBalance || 0) / 1e9;
       return { address, balance: balanceSui.toFixed(6), symbol: 'SUI' };
