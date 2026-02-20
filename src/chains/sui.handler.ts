@@ -43,19 +43,17 @@ export class SuiChainHandler implements ChainHandler {
   async getAccountAddress(adiUrl: string): Promise<AccountAddressResult> {
     const client = this.getClient();
     const ownerHex = '0x' + deriveOwnerBytes32(adiUrl);
-    const salt = deriveSaltU64(adiUrl);
 
     try {
-      // Use devInspectTransactionBlock to call get_address read-only
+      // Look up the real object ID from the factory's adi_to_account registry.
+      // SUI object IDs are runtime-assigned, so get_account_for_adi reads the
+      // registry rather than predicting an address.
       const tx = new Transaction();
-      // get_address(factory, owner, adi_url, salt)
       tx.moveCall({
-        target: `${this.factoryPackage}::certen_account_factory::get_address`,
+        target: `${this.factoryPackage}::certen_account_factory::get_account_for_adi`,
         arguments: [
           tx.object(this.factoryObjectId),
-          tx.pure.address(ownerHex),
           tx.pure.string(adiUrl),
-          tx.pure.u64(salt),
         ],
       });
 
@@ -64,37 +62,36 @@ export class SuiChainHandler implements ChainHandler {
         sender: '0x0000000000000000000000000000000000000000000000000000000000000000',
       });
 
-      // If the devInspect execution failed (e.g. ADI not registered yet), fall back
-      const execStatus = (result as any)?.effects?.status?.status;
-      if (execStatus === 'failure') {
-        return {
-          accountAddress: ownerHex,
-          isDeployed: false,
-          explorerUrl: `${EXPLORER_URL}/object/${ownerHex}`
-        };
-      }
-
-      let predictedAddress = ownerHex; // fallback
+      // Parse Option<address> return value
+      // BCS Option: [0] = None, [1, ...bytes] = Some(address)
       if ((result as any)?.results?.[0]?.returnValues?.[0]) {
         const [bytesArr] = (result as any).results[0].returnValues[0];
-        if (Array.isArray(bytesArr)) {
-          predictedAddress = '0x' + Buffer.from(bytesArr).toString('hex');
+        if (Array.isArray(bytesArr) && bytesArr.length === 33 && bytesArr[0] === 1) {
+          // Some(address) — first byte is 1 (Some), followed by 32-byte address
+          const realAddress = '0x' + Buffer.from(bytesArr.slice(1)).toString('hex');
+
+          // Verify object exists on-chain
+          let isDeployed = false;
+          try {
+            const obj = await client.getObject({ id: realAddress } as any);
+            isDeployed = (obj as any)?.data != null;
+          } catch {
+            // Object doesn't exist
+          }
+
+          return {
+            accountAddress: realAddress,
+            isDeployed,
+            explorerUrl: `${EXPLORER_URL}/object/${realAddress}`
+          };
         }
       }
 
-      // Check if object exists
-      let isDeployed = false;
-      try {
-        const obj = await client.getObject({ id: predictedAddress } as any);
-        isDeployed = (obj as any)?.data != null;
-      } catch {
-        // Object doesn't exist
-      }
-
+      // Not registered yet — return derived owner hash as placeholder
       return {
-        accountAddress: predictedAddress,
-        isDeployed,
-        explorerUrl: `${EXPLORER_URL}/object/${predictedAddress}`
+        accountAddress: ownerHex,
+        isDeployed: false,
+        explorerUrl: `${EXPLORER_URL}/object/${ownerHex}`
       };
     } catch (err) {
       // Fallback: return derived address
