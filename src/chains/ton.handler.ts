@@ -7,13 +7,15 @@
 
 import { TonClient, WalletContractV4, Address, beginCell, toNano, internal } from '@ton/ton';
 import { mnemonicToPrivateKey } from '@ton/crypto';
-import { ethers } from 'ethers';
 import type { ChainHandler, AccountAddressResult, DeployAccountResult, SponsorStatusResult, AddressBalanceResult } from './types.js';
 import { deriveOwnerBytes32, deriveSaltU64 } from './utils.js';
 
 const CHAIN_IDS = ['ton-testnet'];
 const CHAIN_NAME = 'TON Testnet';
 const EXPLORER_URL = 'https://testnet.tonscan.org';
+
+// Tact-generated op codes from compiled ABI
+const OP_CREATE_ACCOUNT_IF_NOT_EXISTS = 3475342255; // CRC32C("CreateAccountIfNotExists") | 0x80000000
 
 export class TonChainHandler implements ChainHandler {
   readonly chainIds = CHAIN_IDS;
@@ -48,9 +50,12 @@ export class TonChainHandler implements ChainHandler {
 
     try {
       // Call getAddress on the factory contract
+      // Tact getter expects: (owner: Address, adiUrl: String, salt: Int)
+      // Address → slice with storeAddress; String → cell with storeStringTail
+      const ownerAddr = new Address(0, ownerBytes);
       const result = await client.runMethod(factoryAddr, 'getAddress', [
-        { type: 'slice', cell: beginCell().storeBuffer(ownerBytes).endCell() },
-        { type: 'slice', cell: beginCell().storeStringTail(adiUrl).endCell() },
+        { type: 'slice', cell: beginCell().storeAddress(ownerAddr).endCell() },
+        { type: 'cell', cell: beginCell().storeStringTail(adiUrl).endCell() },
         { type: 'int', value: salt },
       ]);
 
@@ -113,11 +118,13 @@ export class TonChainHandler implements ChainHandler {
 
     const walletContract = client.open(wallet);
 
-    // Build message body for create_account
+    // Build message body matching Tact's CreateAccountIfNotExists serialization:
+    // op(32) + owner:Address(267) + adiUrl:String(^Cell ref) + salt:uint64(64)
+    const ownerAddr = new Address(0, ownerBytes);
     const messageBody = beginCell()
-      .storeUint(0x01, 32) // op: create_account
-      .storeBuffer(ownerBytes)
-      .storeStringTail(adiUrl)
+      .storeUint(OP_CREATE_ACCOUNT_IF_NOT_EXISTS, 32)
+      .storeAddress(ownerAddr)
+      .storeRef(beginCell().storeStringTail(adiUrl).endCell())
       .storeUint(salt, 64)
       .endCell();
 
