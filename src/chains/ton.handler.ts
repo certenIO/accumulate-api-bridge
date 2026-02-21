@@ -92,10 +92,11 @@ export class TonChainHandler implements ChainHandler {
       // Call getAddress on the factory contract
       // Tact getter expects: (owner: Address, adiUrl: String, salt: Int)
       const ownerAddr = new Address(0, ownerBytes);
+      // Tact compiles String getter params as slice on TVM stack (verified in FunC output)
       const result = await this.withRetry(() =>
         client.runMethod(factoryAddr, 'getAddress', [
           { type: 'slice', cell: beginCell().storeAddress(ownerAddr).endCell() },
-          { type: 'cell', cell: beginCell().storeStringTail(adiUrl).endCell() },
+          { type: 'slice', cell: beginCell().storeStringTail(adiUrl).endCell() },
           { type: 'int', value: salt },
         ])
       );
@@ -134,8 +135,11 @@ export class TonChainHandler implements ChainHandler {
       throw new Error('Sponsored deployment is not configured for TON');
     }
 
-    // Check if already deployed
+    // Check if already deployed (abort if getter fails — don't deploy blindly)
     const addressResult = await this.getAccountAddress(adiUrl);
+    if (addressResult.accountAddress.startsWith('pending-')) {
+      throw new Error('Failed to compute TON account address — cannot deploy without a valid predicted address');
+    }
     if (addressResult.isDeployed) {
       return {
         accountAddress: addressResult.accountAddress,
