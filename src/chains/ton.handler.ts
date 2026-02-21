@@ -23,11 +23,16 @@ export class TonChainHandler implements ChainHandler {
   private factoryAddress: string;
   private rpcUrl: string;
   private apiKey: string;
+  private client: TonClient | null = null;
+  private lastApiCall = 0;
 
   constructor() {
     this.factoryAddress = process.env.TON_FACTORY_ADDRESS || 'kQCiF_punJ_9IQlPw18b2R9XyqwegUImJ8OgdNmfUp2rBsDB';
     this.rpcUrl = process.env.TON_TESTNET_RPC_URL || 'https://testnet.toncenter.com/api/v2/jsonRPC';
     this.apiKey = process.env.TON_TESTNET_API_KEY || '';
+    if (!this.apiKey) {
+      console.warn('⚠️  TON_TESTNET_API_KEY not set — requests will be rate-limited to ~1 req/sec');
+    }
   }
 
   isSponsorConfigured(): boolean {
@@ -36,10 +41,45 @@ export class TonChainHandler implements ChainHandler {
   }
 
   private getClient(): TonClient {
-    return new TonClient({
-      endpoint: this.rpcUrl,
-      apiKey: this.apiKey || undefined,
-    });
+    if (!this.client) {
+      this.client = new TonClient({
+        endpoint: this.rpcUrl,
+        apiKey: this.apiKey || undefined,
+      });
+    }
+    return this.client;
+  }
+
+  /**
+   * Rate limiter + retry for TON Center API calls.
+   * Enforces minimum interval between calls and retries on 429 with exponential backoff.
+   */
+  private async withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      // Enforce minimum interval between API calls to avoid bursting
+      const minInterval = this.apiKey ? 100 : 1200;
+      const elapsed = Date.now() - this.lastApiCall;
+      if (elapsed < minInterval) {
+        await new Promise(r => setTimeout(r, minInterval - elapsed));
+      }
+      this.lastApiCall = Date.now();
+
+      try {
+        return await fn();
+      } catch (err: any) {
+        const is429 = err?.response?.status === 429 ||
+                       err?.response?.data?.code === 429 ||
+                       (typeof err?.message === 'string' && err.message.includes('429'));
+        if (is429 && attempt < retries) {
+          const delay = 2000 * Math.pow(2, attempt);
+          console.log(`  ⏳ TON rate limited, retry ${attempt + 1}/${retries} in ${delay / 1000}s...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('TON API retry exhausted');
   }
 
   async getAccountAddress(adiUrl: string): Promise<AccountAddressResult> {
@@ -51,13 +91,14 @@ export class TonChainHandler implements ChainHandler {
     try {
       // Call getAddress on the factory contract
       // Tact getter expects: (owner: Address, adiUrl: String, salt: Int)
-      // Address → slice with storeAddress; String → cell with storeStringTail
       const ownerAddr = new Address(0, ownerBytes);
-      const result = await client.runMethod(factoryAddr, 'getAddress', [
-        { type: 'slice', cell: beginCell().storeAddress(ownerAddr).endCell() },
-        { type: 'cell', cell: beginCell().storeStringTail(adiUrl).endCell() },
-        { type: 'int', value: salt },
-      ]);
+      const result = await this.withRetry(() =>
+        client.runMethod(factoryAddr, 'getAddress', [
+          { type: 'slice', cell: beginCell().storeAddress(ownerAddr).endCell() },
+          { type: 'cell', cell: beginCell().storeStringTail(adiUrl).endCell() },
+          { type: 'int', value: salt },
+        ])
+      );
 
       const addressCell = result.stack.readAddress();
       const predictedAddress = addressCell.toString();
@@ -65,7 +106,7 @@ export class TonChainHandler implements ChainHandler {
       // Check if contract is deployed at this address
       let isDeployed = false;
       try {
-        const state = await client.getContractState(addressCell);
+        const state = await this.withRetry(() => client.getContractState(addressCell));
         isDeployed = state.state === 'active';
       } catch {
         // Not deployed
@@ -76,8 +117,9 @@ export class TonChainHandler implements ChainHandler {
         isDeployed,
         explorerUrl: `${EXPLORER_URL}/address/${predictedAddress}`
       };
-    } catch (err) {
-      // Fallback: return factory address info with error context
+    } catch (err: any) {
+      // Log the actual error instead of silently swallowing it
+      console.error(`❌ TON getAccountAddress failed for ${adiUrl}:`, err?.message || err);
       const fallbackAddr = factoryAddr.toString();
       return {
         accountAddress: `pending-${fallbackAddr}`,
@@ -130,26 +172,30 @@ export class TonChainHandler implements ChainHandler {
 
     const factoryAddr = Address.parse(this.factoryAddress);
 
-    // Send internal message to factory
-    const seqno = await walletContract.getSeqno();
-    await walletContract.sendTransfer({
+    // Send internal message to factory (with retry for rate limits)
+    const seqno = await this.withRetry(() => walletContract.getSeqno());
+    await this.withRetry(() => walletContract.sendTransfer({
       seqno,
       secretKey: keyPair.secretKey,
       messages: [
         internal({
           to: factoryAddr,
-          value: toNano('0.05'), // 0.05 TON for gas + storage
+          value: toNano('0.05'),
           body: messageBody,
         }),
       ],
-    });
+    }));
 
-    // Wait for transaction to be processed
+    // Wait for transaction to be processed (polling already has 2s delay between checks)
     let attempts = 0;
     while (attempts < 30) {
       await new Promise(resolve => setTimeout(resolve, 2000));
-      const currentSeqno = await walletContract.getSeqno();
-      if (currentSeqno > seqno) break;
+      try {
+        const currentSeqno = await this.withRetry(() => walletContract.getSeqno());
+        if (currentSeqno > seqno) break;
+      } catch {
+        // Ignore polling errors, keep retrying
+      }
       attempts++;
     }
 
@@ -170,7 +216,7 @@ export class TonChainHandler implements ChainHandler {
     try {
       const client = this.getClient();
       const addr = Address.parse(address);
-      const balance = await client.getBalance(addr);
+      const balance = await this.withRetry(() => client.getBalance(addr));
       return { address, balance: (Number(balance) / 1e9).toFixed(6), symbol: 'TON' };
     } catch (e: any) {
       return { address, balance: '0', symbol: 'TON', error: e.message };
@@ -195,9 +241,9 @@ export class TonChainHandler implements ChainHandler {
         workchain: 0,
         publicKey: keyPair.publicKey,
       });
-      const balance = await client.getBalance(wallet.address);
+      const balance = await this.withRetry(() => client.getBalance(wallet.address));
       const balanceTon = Number(balance) / 1e9;
-      const minBalance = 0.5; // 0.5 TON minimum
+      const minBalance = 0.5;
 
       return {
         name: this.chainName,
