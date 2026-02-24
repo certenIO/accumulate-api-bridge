@@ -27,7 +27,7 @@ export class TonChainHandler implements ChainHandler {
   private lastApiCall = 0;
 
   constructor() {
-    this.factoryAddress = process.env.TON_FACTORY_ADDRESS || 'kQDFt6e4GO6HPhWUU_7XTewybzR6xdF05jyF0UAUZ0zwcya6';
+    this.factoryAddress = process.env.TON_FACTORY_ADDRESS || 'kQDjxthBeGX5Z-LeXPLJiZEpuRzIFoC8gjSP5Br412zRQqVJ';
     this.rpcUrl = process.env.TON_TESTNET_RPC_URL || 'https://testnet.toncenter.com/api/v2/jsonRPC';
     this.apiKey = process.env.TON_TESTNET_API_KEY || '';
     if (!this.apiKey) {
