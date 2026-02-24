@@ -184,7 +184,7 @@ export class TonChainHandler implements ChainHandler {
       messages: [
         internal({
           to: factoryAddr,
-          value: toNano('0.05'),
+          value: toNano('0.6'),
           body: messageBody,
         }),
       ],
