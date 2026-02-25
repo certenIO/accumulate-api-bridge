@@ -1,10 +1,10 @@
 # Certen API Bridge
 
-HTTP API service that provides Accumulate network integration for the Certen Protocol web application, supporting ADI management, cross-chain transaction intents, and two-phase signing with Key Vault.
+HTTP API service that provides Accumulate network integration and multi-chain abstract account management for the Certen Protocol web application. Supports ADI management, cross-chain transaction intents, two-phase signing with Key Vault, and sponsored account deployment across 13 blockchain networks.
 
 ## Overview
 
-The Certen API Bridge is an Express.js service that exposes REST endpoints for interacting with the Accumulate blockchain. It handles ADI (Accumulate Digital Identifier) lifecycle management, key book/page operations, credit management, and transaction intent creation. The service supports both direct signing (using server-side keys) and two-phase signing (with Key Vault browser extension).
+The Certen API Bridge is an Express.js service that exposes REST endpoints for interacting with the Accumulate blockchain and managing Certen Abstract Accounts across multiple target chains. It handles ADI (Accumulate Digital Identifier) lifecycle management, key book/page operations, credit management, transaction intent creation, and cross-chain account deployment. The service supports both direct signing (using server-side keys) and two-phase signing (with Key Vault browser extension).
 
 Key capabilities:
 
@@ -14,6 +14,8 @@ Key capabilities:
 4. **Transaction Intents**: Create cryptographically-signed cross-chain intents
 5. **Two-Phase Signing**: Prepare/submit pattern for external Key Vault signing
 6. **Authority Management**: Update account authorities with multi-sig support
+7. **Multi-Chain Account Deployment**: Deploy and manage Certen Abstract Accounts on 13 target chains
+8. **Sponsored Deployment**: Gas-sponsored account creation on non-EVM chains (NEAR, TON)
 
 ## Architecture
 
@@ -29,10 +31,17 @@ Key capabilities:
 |          |                       |                      |         |
 |          v                       v                      v         |
 |  +------------------+    +------------------+    +---------------+ |
-|  |   ADI Storage    |    |   Accumulate     |    |  4-Blob       | |
-|  |   (JSON File)    |    |   SDK Client     |    |  Protocol     | |
+|  |   ADI Storage    |    |   Chain Handler  |    |  4-Blob       | |
+|  |   (JSON File)    |    |   Registry       |    |  Protocol     | |
 |  +------------------+    +------------------+    +---------------+ |
-|                                                                    |
+|                                  |                                |
+|                    +-------------+-------------+                  |
+|                    v             v             v                  |
+|              +----------+ +----------+ +----------+              |
+|              |   EVM    | | Non-EVM  | |   TON    |              |
+|              | Handlers | | Handlers | | Handler  |              |
+|              +----------+ +----------+ +----------+              |
+|                                                                   |
 +------------------------------------------------------------------+
                                   |
                                   v
@@ -40,7 +49,9 @@ Key capabilities:
 |                      External Services                            |
 +------------------------------------------------------------------+
 |  - Accumulate Network (v2/v3 API)                                 |
-|  - Ethereum Network (Sepolia/Mainnet)                             |
+|  - EVM Chains (Ethereum, Arbitrum, Optimism, Base, BSC,           |
+|    Polygon, Moonbeam — all testnets)                              |
+|  - Non-EVM Chains (Solana, Aptos, Sui, NEAR, TON, TRON)          |
 |  - Key Vault Browser Extension                                    |
 |  - Certen Proofs Service                                          |
 +------------------------------------------------------------------+
@@ -48,13 +59,45 @@ Key capabilities:
 
 ## Features
 
-- **RESTful API**: Clean HTTP endpoints for all Accumulate operations
+- **RESTful API**: Clean HTTP endpoints for all Accumulate and chain operations
 - **Two-Phase Signing**: Prepare transaction hash, sign externally, submit
 - **ADI Registry**: Automatic detection and storage of ADI credentials
 - **Retry Logic**: Built-in retry with exponential backoff for network operations
 - **CORS Support**: Configurable origins for web application integration
 - **Intent Protocol**: 4-blob data structure for cross-chain intents
 - **Multi-Leg Intents**: Support for complex multi-destination transfers
+- **13-Chain Support**: Unified chain handler interface for EVM and non-EVM blockchains
+- **Sponsored Deployment**: Gas-free account deployment on NEAR and TON via sponsor wallets
+- **Deterministic Addresses**: Predict abstract account addresses before deployment (CREATE2 / StateInit)
+
+## Supported Target Chains
+
+The API Bridge manages Certen Abstract Accounts across 13 blockchain networks through a unified `ChainHandler` interface:
+
+### EVM Chains (7 testnets)
+
+| Chain | Chain ID | Network | Explorer |
+|-------|----------|---------|----------|
+| Ethereum Sepolia | `sepolia` | 11155111 | etherscan.io |
+| Arbitrum Sepolia | `arbitrum-sepolia` | 421614 | arbiscan.io |
+| Base Sepolia | `base-sepolia` | 84532 | base.org |
+| BSC Testnet | `bsc-testnet` | 97 | bscscan.com |
+| Optimism Sepolia | `optimism-sepolia` | 11155420 | etherscan.io |
+| Polygon Amoy | `polygon-amoy` | 80002 | polygonscan.com |
+| Moonbase Alpha | `moonbase-alpha` | 1287 | moonscan.io |
+
+### Non-EVM Chains (6 testnets)
+
+| Chain | Chain ID | Runtime | Explorer |
+|-------|----------|---------|----------|
+| Solana Devnet | `solana-devnet` | Anchor/Rust | solscan.io |
+| Aptos Testnet | `aptos-testnet` | Move | aptoslabs.com |
+| Sui Testnet | `sui-testnet` | Move | suiscan.xyz |
+| NEAR Testnet | `near-testnet` | Rust/WASM | nearblocks.io |
+| TRON Shasta | `tron-testnet` | Solidity/TVM | tronscan.org |
+| TON Testnet | `ton-testnet` | Tact/FunC | tonscan.org |
+
+Each chain handler implements: `getAccountAddress`, `deployAccount`, `getAddressBalance`, and `getSponsorStatus`.
 
 ## Prerequisites
 
@@ -143,6 +186,15 @@ docker run -d \
 | `DATA_DIR` | No | ./data | ADI storage directory |
 | `LOG_LEVEL` | No | debug | Logging verbosity |
 | `DEBUG_TRANSACTIONS` | No | false | Enable transaction logging |
+| `INFURA_API_KEY` | No | - | Infura API key for EVM chain RPCs |
+| `NEAR_SPONSORED_DEPLOYMENT_ENABLED` | No | false | Enable sponsored NEAR deployment |
+| `NEAR_FACTORY_ACCOUNT` | No | - | NEAR factory contract ID |
+| `NEAR_SPONSOR_ACCOUNT_ID` | No | - | NEAR sponsor account ID |
+| `NEAR_SPONSOR_PRIVATE_KEY` | No | - | NEAR sponsor Ed25519 private key |
+| `TON_SPONSORED_DEPLOYMENT_ENABLED` | No | false | Enable sponsored TON deployment |
+| `TON_FACTORY_ADDRESS` | No | - | TON factory contract address |
+| `TON_TESTNET_API_KEY` | No | - | TON Center API key (avoids rate limits) |
+| `TON_SPONSOR_MNEMONIC` | No | - | TON sponsor wallet 24-word mnemonic |
 
 ### Network Endpoints
 
@@ -162,7 +214,20 @@ api-bridge/
 │   ├── AccumulateService.ts      # Accumulate SDK wrapper
 │   ├── AdiStorageService.ts      # ADI persistence
 │   ├── CertenIntentService.ts    # Intent creation
-│   └── Logger.ts                 # Winston logger
+│   ├── Logger.ts                 # Winston logger
+│   └── chains/                   # Multi-chain handler system
+│       ├── index.ts              # Barrel exports
+│       ├── registry.ts           # Chain handler registration
+│       ├── types.ts              # ChainHandler interface
+│       ├── utils.ts              # Address derivation (owner bytes, salt)
+│       ├── validator-addresses.ts # Validator wallet addresses per chain
+│       ├── evm.handler.ts        # EVM chains (7 networks)
+│       ├── solana.handler.ts     # Solana Devnet
+│       ├── aptos.handler.ts      # Aptos Testnet
+│       ├── sui.handler.ts        # Sui Testnet
+│       ├── near.handler.ts       # NEAR Testnet
+│       ├── tron.handler.ts       # TRON Shasta
+│       └── ton.handler.ts        # TON Testnet
 ├── data/
 │   └── adis.json                 # Stored ADI data
 ├── .env.example                  # Environment template
@@ -238,6 +303,17 @@ api-bridge/
 | `/api/v1/intent/submit-signed` | POST | Submit signed intent |
 | `/api/v1/intent/multi-leg/create` | POST | Create multi-leg intent |
 | `/api/v1/intent/multi-leg/prepare` | POST | Prepare multi-leg (two-phase) |
+
+### Chain Management
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/chain/account-address` | GET | Predict abstract account address on target chain |
+| `/api/v1/chain/deploy-account` | POST | Deploy Certen Abstract Account (sponsored) |
+| `/api/v1/chain/wallet-balance` | GET | Get native token balance on any chain |
+| `/api/v1/chain/sponsor-status` | GET | Check sponsor wallet status across all chains |
+| `/api/v1/chain/validator-balances` | GET | Get validator node balances on non-EVM chains |
+| `/api/v1/chain/verify-address` | POST | Verify address ownership on target chain |
 
 ### Network Information
 
@@ -407,6 +483,8 @@ gcloud run deploy api-bridge \
 
 | Component | Repository | Description |
 |-----------|------------|-------------|
+| Smart Contracts | `certen-contracts` | EVM, Solana, Aptos, Sui, NEAR, TON, TRON contract suites |
+| Validator | `independant_validator` | BFT consensus node for proof generation and anchoring |
 | Web App | `certen-web-app` | React SPA that uses this API |
 | Key Vault | `key-vault-signer` | Browser extension for signing |
 | Pending Service | `certen-pending-service` | Multi-sig discovery |
@@ -416,4 +494,4 @@ gcloud run deploy api-bridge \
 
 MIT License
 
-Copyright 2025 Certen Protocol. All rights reserved.
+Copyright 2026 Certen Protocol. All rights reserved.
