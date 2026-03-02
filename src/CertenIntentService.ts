@@ -836,7 +836,7 @@ export class CertenIntentService {
         {
           "legId": legId,
           "role": "payment",
-          "chain": intent.toChain.toLowerCase().includes("sepolia") ? "ethereum" : intent.toChain.toLowerCase(),
+          "chain": intent.toChain.toLowerCase().includes("sepolia") ? "ethereum-sepolia" : intent.toChain.toLowerCase(),
           "chainId": intent.toChainId || 11155111,
           "network": intent.toChain.toLowerCase(),
           "asset": {
