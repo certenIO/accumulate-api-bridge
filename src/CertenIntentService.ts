@@ -22,6 +22,33 @@ function getChainSymbol(chain: string): string {
   return 'ETH';
 }
 
+/** Normalize human-readable chain names to hyphenated identifiers for validator registry */
+function mapChainName(chainName: string): string {
+  const lower = chainName.toLowerCase().trim();
+  if (lower.includes('sepolia')) {
+    if (lower.includes('optimism') || lower.includes('op'))   return 'optimism-sepolia';
+    if (lower.includes('arbitrum') || lower.includes('arb'))  return 'arbitrum-sepolia';
+    if (lower.includes('base'))                                return 'base-sepolia';
+    return 'ethereum-sepolia';
+  }
+  if (lower.includes('amoy'))       return 'polygon-amoy';
+  if (lower.includes('moonbase'))   return 'moonbase-alpha';
+  if (lower.includes('shasta'))     return 'tron-shasta';
+  if (lower.includes('ton') && lower.includes('test')) return 'ton-testnet';
+  if (lower.includes('solana') && lower.includes('dev')) return 'solana-devnet';
+  if (lower.includes('near') && lower.includes('test')) return 'near-testnet';
+  if (lower.includes('ethereum'))   return 'ethereum';
+  if (lower.includes('polygon'))    return 'polygon';
+  if (lower.includes('arbitrum'))   return 'arbitrum';
+  if (lower.includes('optimism'))   return 'optimism';
+  if (lower.includes('base'))       return 'base';
+  if (lower.includes('moonbeam'))   return 'moonbeam';
+  if (lower.includes('ton'))        return 'ton-mainnet';
+  if (lower.includes('solana'))     return 'solana-mainnet';
+  if (lower.includes('near'))       return 'near-mainnet';
+  return lower.replace(/\s+/g, '-');
+}
+
 /** Convert a human-readable amount to base units for the given chain decimals */
 function convertToBaseUnits(amount: string, decimals: number): string {
   const amountStr = amount.toString();
@@ -473,9 +500,9 @@ export class CertenIntentService {
     const legs = intent.legs.map((leg, index) => ({
       "legId": leg.legId,
       "role": leg.role || "destination",
-      "chain": leg.chain.toLowerCase(),
+      "chain": mapChainName(leg.chain),
       "chainId": leg.chainId,
-      "network": leg.chain.toLowerCase(),
+      "network": mapChainName(leg.chain),
       "asset": {
         "symbol": leg.tokenSymbol || getChainSymbol(leg.chain),
         "decimals": getChainDecimals(leg.chain),
@@ -836,9 +863,9 @@ export class CertenIntentService {
         {
           "legId": legId,
           "role": "payment",
-          "chain": intent.toChain.toLowerCase().includes("sepolia") ? "ethereum-sepolia" : intent.toChain.toLowerCase(),
+          "chain": mapChainName(intent.toChain),
           "chainId": intent.toChainId || 11155111,
-          "network": intent.toChain.toLowerCase(),
+          "network": mapChainName(intent.toChain),
           "asset": {
             "symbol": intent.tokenSymbol || getChainSymbol(intent.toChain),
             "decimals": chainDecimals,

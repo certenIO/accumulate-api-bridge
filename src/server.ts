@@ -38,6 +38,33 @@ function getChainSymbol(chain: string): string {
   return 'ETH';
 }
 
+/** Normalize human-readable chain names to hyphenated identifiers for validator registry */
+function mapChainName(chainName: string): string {
+  const lower = chainName.toLowerCase().trim();
+  if (lower.includes('sepolia')) {
+    if (lower.includes('optimism') || lower.includes('op'))   return 'optimism-sepolia';
+    if (lower.includes('arbitrum') || lower.includes('arb'))  return 'arbitrum-sepolia';
+    if (lower.includes('base'))                                return 'base-sepolia';
+    return 'ethereum-sepolia';
+  }
+  if (lower.includes('amoy'))       return 'polygon-amoy';
+  if (lower.includes('moonbase'))   return 'moonbase-alpha';
+  if (lower.includes('shasta'))     return 'tron-shasta';
+  if (lower.includes('ton') && lower.includes('test')) return 'ton-testnet';
+  if (lower.includes('solana') && lower.includes('dev')) return 'solana-devnet';
+  if (lower.includes('near') && lower.includes('test')) return 'near-testnet';
+  if (lower.includes('ethereum'))   return 'ethereum';
+  if (lower.includes('polygon'))    return 'polygon';
+  if (lower.includes('arbitrum'))   return 'arbitrum';
+  if (lower.includes('optimism'))   return 'optimism';
+  if (lower.includes('base'))       return 'base';
+  if (lower.includes('moonbeam'))   return 'moonbeam';
+  if (lower.includes('ton'))        return 'ton-mainnet';
+  if (lower.includes('solana'))     return 'solana-mainnet';
+  if (lower.includes('near'))       return 'near-mainnet';
+  return lower.replace(/\s+/g, '-');
+}
+
 function convertToBaseUnits(amount: string, decimals: number): string {
   const amountStr = amount.toString();
   const [integerPart, decimalPart = ''] = amountStr.split('.');
@@ -1847,9 +1874,9 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
         {
           legId: legId,
           role: "payment",
-          chain: (intent.toChain || "ethereum").toLowerCase().includes("sepolia") ? "ethereum" : (intent.toChain || "ethereum").toLowerCase(),
+          chain: mapChainName(intent.toChain || "ethereum-sepolia"),
           chainId: intent.toChainId || 11155111,
-          network: (intent.toChain || "sepolia").toLowerCase(),
+          network: mapChainName(intent.toChain || "ethereum-sepolia"),
           asset: {
             symbol: intent.tokenSymbol || getChainSymbol(intent.toChain || 'ethereum'),
             decimals: chainDecimals,
@@ -1939,7 +1966,7 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
       expires_at: expiresAtSeconds,
       intent_hash: "",  // Will be calculated below
       chain_nonces: {
-        [(intent.fromChain || "ethereum").toLowerCase()]: "latest",
+        [mapChainName(intent.fromChain || "ethereum-sepolia")]: "latest",
         accumulated: "1"
       },
       execution_window: {
@@ -4937,7 +4964,7 @@ app.post('/api/v2/intents', async (req, res) => {
     const intentLegs: IntentLeg[] = cross_chain_data.legs.map((leg: any, index: number) => ({
       legId: leg.legId || `leg-${index}`,
       role: leg.role || (index === 0 ? 'source' : 'destination'),
-      chain: leg.chain || 'ethereum',
+      chain: mapChainName(leg.chain || 'ethereum-sepolia'),
       chainId: leg.chainId || 1,
       fromAddress: leg.from || '',
       toAddress: leg.to || '',
@@ -5100,7 +5127,7 @@ app.post('/api/v2/intents/prepare', async (req, res) => {
     const intentLegs: IntentLeg[] = cross_chain_data.legs.map((leg: any, index: number) => ({
       legId: leg.legId || `leg-${index}`,
       role: leg.role || (index === 0 ? 'source' : 'destination'),
-      chain: leg.chain || 'ethereum',
+      chain: mapChainName(leg.chain || 'ethereum-sepolia'),
       chainId: leg.chainId || 1,
       fromAddress: leg.from || '',
       toAddress: leg.to || '',
