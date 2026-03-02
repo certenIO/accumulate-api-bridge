@@ -362,6 +362,7 @@ async function initializeAdiRegistry() {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  res.set('Cache-Control', 'no-store');
   res.json({
     status: 'ok',
     service: 'accumulate-bridge',
