@@ -138,7 +138,8 @@ export class EvmChainHandler implements ChainHandler {
         this.getProvider()
       ) as any;
 
-      const predictedAddress: string = await factory.getAddress(ownerAddress, adiUrl, salt);
+      // Use bracket notation to avoid collision with ethers v6 BaseContract.getAddress()
+      const predictedAddress: string = await factory['getAddress(address,string,uint256)'](ownerAddress, adiUrl, salt);
 
       // Moonbeam fix: validate that factory didn't return zero/empty address
       if (!predictedAddress || predictedAddress === '0x0000000000000000000000000000000000000000') {
@@ -178,7 +179,7 @@ export class EvmChainHandler implements ChainHandler {
       const minBalance = ethers.parseEther(process.env.EVM_SPONSOR_MIN_BALANCE || '0.01');
       const [sponsorBalance, predictedAddress, deploymentFee] = await Promise.all([
         provider.getBalance(sponsorWallet.address),
-        factory.getAddress(ownerAddress, adiUrl, salt) as Promise<string>,
+        factory['getAddress(address,string,uint256)'](ownerAddress, adiUrl, salt) as Promise<string>,
         factory.deploymentFee() as Promise<bigint>,
       ]);
 
