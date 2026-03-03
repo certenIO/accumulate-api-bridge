@@ -38,6 +38,33 @@ function getChainSymbol(chain: string): string {
   return 'ETH';
 }
 
+/** Map chain names to their numeric chain IDs (EVM chain IDs or protocol-assigned IDs) */
+function getChainId(chainName: string): number {
+  const lower = chainName.toLowerCase().trim();
+  if (lower.includes('sepolia')) {
+    if (lower.includes('optimism') || lower.includes('op'))  return 11155420;
+    if (lower.includes('arbitrum') || lower.includes('arb')) return 421614;
+    if (lower.includes('base'))                               return 84532;
+    return 11155111;
+  }
+  if (lower.includes('amoy'))       return 80002;
+  if (lower.includes('moonbase'))   return 1287;
+  if (lower.includes('bsc') && lower.includes('test')) return 97;
+  if (lower.includes('tron') || lower.includes('shasta')) return 2494104990;
+  if (lower.includes('solana'))     return 103;   // Solana devnet
+  if (lower.includes('near'))       return 398;   // NEAR testnet
+  if (lower.includes('aptos'))      return 2;     // Aptos testnet
+  if (lower.includes('sui'))        return 2;     // Sui testnet
+  if (lower.includes('ton'))        return -3;    // TON testnet
+  if (lower.includes('ethereum'))   return 1;
+  if (lower.includes('polygon'))    return 137;
+  if (lower.includes('arbitrum'))   return 42161;
+  if (lower.includes('optimism'))   return 10;
+  if (lower.includes('base'))       return 8453;
+  if (lower.includes('moonbeam'))   return 1284;
+  return 11155111;
+}
+
 /** Normalize human-readable chain names to hyphenated identifiers for validator registry */
 function mapChainName(chainName: string): string {
   const lower = chainName.toLowerCase().trim();
@@ -1833,7 +1860,7 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
     // Convert amount to base units using chain-specific decimals
     const chainDecimals = getChainDecimals(intent.toChain || 'ethereum');
     const amountWei = convertToBaseUnits(intent.amount, chainDecimals);
-    const legId = `leg-${(intent.toChain || 'ethereum').toLowerCase()}-${intent.toChainId || 11155111}-1`;
+    const legId = `leg-${(intent.toChain || 'ethereum').toLowerCase()}-${intent.toChainId || getChainId(intent.toChain || 'ethereum')}-1`;
 
     // data[0]: intentData - Protocol metadata, proof_class, descriptions
     const intentData = {
@@ -1875,7 +1902,7 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
           legId: legId,
           role: "payment",
           chain: mapChainName(intent.toChain || "ethereum-sepolia"),
-          chainId: intent.toChainId || 11155111,
+          chainId: intent.toChainId || getChainId(intent.toChain || 'ethereum'),
           network: mapChainName(intent.toChain || "ethereum-sepolia"),
           asset: {
             symbol: intent.tokenSymbol || getChainSymbol(intent.toChain || 'ethereum'),
