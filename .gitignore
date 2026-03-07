@@ -18,9 +18,10 @@ dist/
 data/
 *.json.bak
 
-# IDE
+# IDE / tool config
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~
@@ -45,6 +46,8 @@ coverage/
 tmp/
 temp/
 .cache/
+tmpclaude-*
+nul
 
 # Docker
 .docker/
@@ -54,3 +57,10 @@ temp/
 *.key
 credentials.json
 secrets.json
+temp_key_for_intent_script.md
+
+# Ad-hoc scripts with hardcoded secrets
+scripts/send-eth.js
+
+# Ad-hoc test files
+test_proof_class_validation.js
