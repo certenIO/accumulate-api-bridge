@@ -221,6 +221,10 @@ export interface CreateMultiLegIntentRequest {
   expirationMinutes?: number;
   proofClass?: ProofClass;
   executionMode?: ExecutionMode;
+  additionalAuthorities?: string[];
+  gasLimit?: string;
+  maxGasPrice?: string;
+  slippageTolerance?: string;
 }
 
 // Intent creation response interface
@@ -371,7 +375,11 @@ export class CertenIntentService {
         request.validationRules,
         request.expirationMinutes,
         request.proofClass || 'on_demand',
-        request.executionMode || 'sequential'
+        request.executionMode || 'sequential',
+        request.additionalAuthorities,
+        request.gasLimit,
+        request.maxGasPrice,
+        request.slippageTolerance,
       );
 
       // Extract ADI and data account names
@@ -499,7 +507,11 @@ export class CertenIntentService {
     validationRules?: Partial<ValidationRules>,
     expirationMinutes: number = 95,
     proofClass: ProofClass = 'on_demand',
-    executionMode: ExecutionMode = 'sequential'
+    executionMode: ExecutionMode = 'sequential',
+    additionalAuthorities?: string[],
+    gasLimit?: string,
+    maxGasPrice?: string,
+    slippageTolerance?: string,
   ): string[] {
     // data[0]: intentData - Protocol v2.0 for multi-leg
     const intentData = {
@@ -561,13 +573,13 @@ export class CertenIntentService {
         "version": "v4.0"  // V4 for multi-leg support
       },
       "gasPolicy": {
-        "maxFeePerGasGwei": "20",
+        "maxFeePerGasGwei": maxGasPrice || "20",
         "maxPriorityFeePerGasGwei": "2",
-        "gasLimit": 300000,
+        "gasLimit": gasLimit ? parseInt(gasLimit, 10) : 300000,
         "payer": "from",
         "gas_estimation_buffer": 1.2
       },
-      "slippage_tolerance": "0.5%",
+      "slippage_tolerance": slippageTolerance ? `${slippageTolerance}%` : "0.5%",
       "deadline_timestamp": Math.floor(Date.now() / 1000) + 3600
     }));
 
@@ -628,7 +640,10 @@ export class CertenIntentService {
             "keyPage": `${intent.adiUrl}/book/page`
           }
         ],
-        "authorization_hash": this.calculateMultiLegAuthorizationHash(intent)
+        "authorization_hash": this.calculateMultiLegAuthorizationHash(intent),
+        ...(additionalAuthorities && additionalAuthorities.length > 0
+          ? { "additional_authorities": additionalAuthorities }
+          : {}),
       },
       "validation_rules": {
         "max_amount": validationRules?.maxAmount || "10.0",
@@ -1202,7 +1217,11 @@ export class CertenIntentService {
         request.validationRules,
         request.expirationMinutes,
         request.proofClass || 'on_demand',
-        request.executionMode || 'sequential'
+        request.executionMode || 'sequential',
+        request.additionalAuthorities,
+        request.gasLimit,
+        request.maxGasPrice,
+        request.slippageTolerance,
       );
 
       // Extract ADI and data account names

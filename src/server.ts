@@ -5097,6 +5097,10 @@ app.post('/api/v2/intents/prepare', async (req, res) => {
       adi_url,
       public_key,  // Required for two-phase signing
       signer_key_page_url,
+      additional_authorities,
+      gas_limit,
+      max_gas_price,
+      slippage_tolerance,
     } = req.body;
 
     // Validate required fields
@@ -5184,6 +5188,10 @@ app.post('/api/v2/intents/prepare', async (req, res) => {
       },
       proofClass: proof_class as 'on_demand' | 'on_cadence',
       executionMode: execution_mode as ExecutionMode,
+      additionalAuthorities: additional_authorities,
+      gasLimit: gas_limit,
+      maxGasPrice: max_gas_price,
+      slippageTolerance: slippage_tolerance,
     };
 
     // Prepare the multi-leg intent for external signing
