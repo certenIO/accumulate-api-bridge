@@ -59,7 +59,7 @@ export class Url {
 }
 export class Time {
     encode(value) {
-        return uintMarshalBinary(value.getTime() / 1000);
+        return intMarshalBinary(Math.floor(value.getTime() / 1000));
     }
 }
 export class Duration {
