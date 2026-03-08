@@ -48,6 +48,7 @@ temp/
 .cache/
 tmpclaude-*
 nul
+debt-todo/
 
 # Docker
 .docker/

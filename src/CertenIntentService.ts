@@ -1244,7 +1244,10 @@ export class CertenIntentService {
         dataEntries,
         signerKeyPageUrl,
         CERTEN_INTENT_MEMO,
-        publicKey  // Required for computing initiator and proper hash to sign
+        publicKey,     // Required for computing initiator and proper hash to sign
+        undefined,     // transactionMetadata
+        undefined,     // expireAtTime
+        request.additionalAuthorities  // Additional authority URLs for multi-sig
       );
 
       if (result.success) {

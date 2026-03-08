@@ -2388,21 +2388,14 @@ export class AccumulateService {
         transactionHeader.metadata = Buffer.from(transactionMetadata, 'utf8');
       }
 
-      // NOTE: expire and authorities fields are NOT supported by the current Accumulate protocol!
-      // The Go SDK's TransactionHeader only has: Principal, Initiator, Memo, Metadata
-      // Adding these fields causes hash mismatch and signature validation failure.
-      if (expireAtTime) {
-        this.logger.warn('⚠️ expire field NOT SUPPORTED by Accumulate protocol - ignoring', {
-          expireAtTime: expireAtTime
-        });
-        // transactionHeader.expire is not supported
-      }
-
+      // Additional authorities — field 7 of TransactionHeader (repeatable URL)
+      // When set, the Accumulate node requires signatures from BOTH the principal's
+      // authority AND each additional authority before the transaction executes.
       if (additionalAuthorities && additionalAuthorities.length > 0) {
-        this.logger.warn('⚠️ authorities field NOT SUPPORTED by Accumulate protocol - ignoring', {
+        this.logger.info('🔐 Adding additional authorities to transaction header', {
           authorities: additionalAuthorities
         });
-        // transactionHeader.authorities is not supported
+        transactionHeader.authorities = additionalAuthorities;
       }
 
       // If public key is provided, compute the proper hash to sign
