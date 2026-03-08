@@ -19,7 +19,115 @@ function getChainSymbol(chain: string): string {
   if (lower.includes('tron')) return 'TRX';
   if (lower.includes('solana')) return 'SOL';
   if (lower.includes('near')) return 'NEAR';
+  if (lower.includes('aptos')) return 'APT';
+  if (lower.includes('sui')) return 'SUI';
+  if (lower.includes('ton')) return 'TON';
   return 'ETH';
+}
+
+/** Returns the chain type for per-chain intent formatting */
+function getChainType(chain: string): 'evm' | 'solana' | 'near' | 'tron' | 'aptos' | 'sui' | 'ton' {
+  const lower = chain.toLowerCase();
+  if (lower.includes('solana')) return 'solana';
+  if (lower.includes('near')) return 'near';
+  if (lower.includes('tron') || lower.includes('shasta')) return 'tron';
+  if (lower.includes('aptos')) return 'aptos';
+  if (lower.includes('sui')) return 'sui';
+  if (lower.includes('ton')) return 'ton';
+  return 'evm';
+}
+
+/** Returns the native unit name for a chain (e.g., "wei", "lamports", "sun", "yoctoNEAR") */
+function getBaseUnitName(chain: string): string {
+  const type = getChainType(chain);
+  switch (type) {
+    case 'solana': return 'lamports';
+    case 'near': return 'yoctoNEAR';
+    case 'tron': return 'sun';
+    case 'aptos': return 'octas';
+    case 'sui': return 'mist';
+    case 'ton': return 'nanoton';
+    default: return 'wei';
+  }
+}
+
+/** Returns chain-specific anchor/program info for a leg */
+function getChainAnchorInfo(chain: string, evmAnchorAddress: string): Record<string, unknown> {
+  const type = getChainType(chain);
+  switch (type) {
+    case 'solana':
+      return {
+        type: 'solana_program',
+        programId: process.env.SOLANA_ANCHOR_PROGRAM_ID || '2JcPAjzBp2rdHK6AAsdw5ArrDeB1aw6fFufk7C1tYnNj',
+        blsVerifier: process.env.SOLANA_BLS_VERIFIER_PROGRAM_ID || '2uYnieNHceDYc1LWJsM11SYUK9hDCDrH5pfQjh5m2Hoa',
+        accountFactory: process.env.SOLANA_ACCOUNT_FACTORY_PROGRAM_ID || 'FBcWmM1w7wJ9gmzEMNhDFCVKGryGaM8yYuDfjGpdD1Nc',
+        version: 'v1.0',
+      };
+    case 'near':
+      return {
+        type: 'near_contract',
+        contractId: process.env.NEAR_ANCHOR_CONTRACT || 'certen-anchor-v4.testnet',
+        version: 'v1.0',
+      };
+    case 'tron':
+      return {
+        type: 'tron_contract',
+        address: process.env.TRON_ANCHOR_CONTRACT || 'TBD',
+        version: 'v1.0',
+      };
+    case 'aptos':
+      return {
+        type: 'aptos_module',
+        moduleAddress: process.env.APTOS_ANCHOR_ADDRESS || '0x1',
+        version: 'v1.0',
+      };
+    default:
+      return {
+        type: 'evm_contract',
+        address: evmAnchorAddress,
+        functionSelector: "createAnchorWithLegs(bytes32,bytes32,bytes32,uint8,(bytes32,uint8,address,address,uint256,bytes32)[])",
+        version: "v4.0",
+      };
+  }
+}
+
+/** Returns chain-specific execution policy (gas for EVM, compute for Solana, etc.) */
+function getChainExecutionPolicy(chain: string, maxGasPrice?: string, gasLimit?: string): Record<string, unknown> {
+  const type = getChainType(chain);
+  switch (type) {
+    case 'solana':
+      return { computeBudget: 400000, priorityFee: 5000, payer: 'validator' };
+    case 'near':
+      return { gasAmount: '300000000000000', payer: 'validator' };
+    case 'tron':
+      return { feeLimit: 150000000, energyLimit: 1000000, payer: 'validator' };
+    case 'aptos':
+      return { maxGasAmount: 200000, gasUnitPrice: 100, payer: 'validator' };
+    case 'sui':
+      return { gasBudget: 50000000, payer: 'validator' };
+    case 'ton':
+      return { forwardAmount: '50000000', payer: 'validator' };
+    default:
+      return {
+        maxFeePerGasGwei: maxGasPrice || "20",
+        maxPriorityFeePerGasGwei: "2",
+        gasLimit: gasLimit ? parseInt(gasLimit, 10) : 300000,
+        payer: "from",
+        gas_estimation_buffer: 1.2,
+      };
+  }
+}
+
+/** Returns chain-specific failure modes for rollback conditions */
+function getChainFailureModes(chain: string): string[] {
+  const type = getChainType(chain);
+  switch (type) {
+    case 'solana': return ['compute_exceeded', 'insufficient_lamports', 'program_error'];
+    case 'near': return ['exceeded_prepaid_gas', 'insufficient_balance', 'action_error'];
+    case 'tron': return ['out_of_energy', 'insufficient_balance', 'revert'];
+    case 'aptos': return ['out_of_gas', 'insufficient_balance', 'move_abort'];
+    default: return ['gas_limit_exceeded', 'insufficient_balance'];
+  }
 }
 
 /** Map chain names to their numeric chain IDs (EVM chain IDs or protocol-assigned IDs) */
@@ -189,6 +297,7 @@ export interface IntentLeg {
   dependsOnLegs?: string[];
   maxRetries?: number;
   priority?: number;
+  accountOwner?: string;
 }
 
 // Multi-leg transaction intent interface
@@ -542,48 +651,50 @@ export class CertenIntentService {
     };
 
     // data[1]: crossChainData - Protocol v2.0 with multiple legs
-    const legs = intent.legs.map((leg, index) => ({
-      "legId": leg.legId,
-      "role": leg.role || "destination",
-      "chain": mapChainName(leg.chain),
-      "chainId": leg.chainId,
-      "network": mapChainName(leg.chain),
-      "asset": {
-        "symbol": leg.tokenSymbol || getChainSymbol(leg.chain),
-        "decimals": getChainDecimals(leg.chain),
-        "native": !leg.tokenAddress,
-        "contract_address": leg.tokenAddress || null,
-        "verified": true
-      },
-      "from": leg.fromAddress,
-      "to": leg.toAddress,
-      "amountEth": leg.amount,
-      "amountWei": leg.amountWei || convertToBaseUnits(leg.amount, getChainDecimals(leg.chain)),
-      "sequence_order": leg.sequenceOrder ?? index,
-      "depends_on_legs": leg.dependsOnLegs || [],
-      "max_retries": leg.maxRetries || 3,
-      "priority": leg.priority || 0,
-      "execution_sequence": index + 1,
-      "conditional_execution": (leg.dependsOnLegs?.length ?? 0) > 0,
-      "rollback_conditions": {
-        "timeout_seconds": 3600,
-        "failure_modes": ["gas_limit_exceeded", "insufficient_balance"]
-      },
-      "anchorContract": {
-        "address": contractAddresses.anchor,
-        "functionSelector": "createAnchorWithLegs(bytes32,bytes32,bytes32,uint8,(bytes32,uint8,address,address,uint256,bytes32)[])",
-        "version": "v4.0"  // V4 for multi-leg support
-      },
-      "gasPolicy": {
-        "maxFeePerGasGwei": maxGasPrice || "20",
-        "maxPriorityFeePerGasGwei": "2",
-        "gasLimit": gasLimit ? parseInt(gasLimit, 10) : 300000,
-        "payer": "from",
-        "gas_estimation_buffer": 1.2
-      },
-      "slippage_tolerance": slippageTolerance ? `${slippageTolerance}%` : "0.5%",
-      "deadline_timestamp": Math.floor(Date.now() / 1000) + 3600
-    }));
+    // Each leg gets chain-specific metadata (anchor info, execution policy, units)
+    const legs = intent.legs.map((leg, index) => {
+      const chainName = mapChainName(leg.chain);
+      const decimals = getChainDecimals(leg.chain);
+      const baseUnitName = getBaseUnitName(leg.chain);
+      // Always compute base units from amount + decimals (ignore pre-computed amountWei
+      // which may have been calculated with wrong decimals by the frontend)
+      const baseUnits = convertToBaseUnits(leg.amount, decimals);
+
+      return {
+        "legId": leg.legId,
+        "role": leg.role || "destination",
+        "chain": chainName,
+        "chainId": leg.chainId,
+        "network": chainName,
+        "asset": {
+          "symbol": leg.tokenSymbol || getChainSymbol(leg.chain),
+          "decimals": decimals,
+          "native": !leg.tokenAddress,
+          "contract_address": leg.tokenAddress || null,
+          "verified": true
+        },
+        "from": leg.fromAddress,
+        "to": leg.toAddress,
+        "amountEth": leg.amount,
+        "amountWei": baseUnits,
+        [`amount_${baseUnitName}`]: baseUnits,
+        "sequence_order": leg.sequenceOrder ?? index,
+        "depends_on_legs": leg.dependsOnLegs || [],
+        "max_retries": leg.maxRetries || 3,
+        "priority": leg.priority || 0,
+        "execution_sequence": index + 1,
+        "conditional_execution": (leg.dependsOnLegs?.length ?? 0) > 0,
+        "rollback_conditions": {
+          "timeout_seconds": 3600,
+          "failure_modes": getChainFailureModes(leg.chain)
+        },
+        "anchorContract": getChainAnchorInfo(leg.chain, contractAddresses.anchor),
+        "gasPolicy": getChainExecutionPolicy(leg.chain, maxGasPrice, gasLimit),
+        "slippage_tolerance": slippageTolerance ? `${slippageTolerance}%` : "0.5%",
+        "deadline_timestamp": Math.floor(Date.now() / 1000) + 3600,
+        "accountOwner": leg.accountOwner,
+      };
+    });
 
     // Build leg dependencies for crossChainData
     const legDependencies = intent.legs
