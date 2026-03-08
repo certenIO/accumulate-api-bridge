@@ -222,6 +222,8 @@ export interface CreateMultiLegIntentRequest {
   proofClass?: ProofClass;
   executionMode?: ExecutionMode;
   additionalAuthorities?: string[];
+  expireAtTime?: string;
+  transactionMetadata?: string;
   gasLimit?: string;
   maxGasPrice?: string;
   slippageTolerance?: string;
@@ -1245,8 +1247,8 @@ export class CertenIntentService {
         signerKeyPageUrl,
         CERTEN_INTENT_MEMO,
         publicKey,     // Required for computing initiator and proper hash to sign
-        undefined,     // transactionMetadata
-        undefined,     // expireAtTime
+        request.transactionMetadata,   // transactionMetadata
+        request.expireAtTime,          // expireAtTime
         request.additionalAuthorities  // Additional authority URLs for multi-sig
       );
 

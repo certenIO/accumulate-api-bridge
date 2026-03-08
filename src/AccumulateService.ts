@@ -2388,6 +2388,20 @@ export class AccumulateService {
         transactionHeader.metadata = Buffer.from(transactionMetadata, 'utf8');
       }
 
+      // Expire — field 5 of TransactionHeader (ExpireOptions with atTime)
+      // expireAtTime arrives as a Unix timestamp in seconds (string).
+      // The SDK's ExpireOptions.atTime expects a Date object.
+      if (expireAtTime) {
+        const expireTimestamp = parseInt(expireAtTime, 10);
+        if (!isNaN(expireTimestamp) && expireTimestamp > 0) {
+          this.logger.info('⏰ Adding expire condition to transaction header', {
+            expireAtTime,
+            expireDate: new Date(expireTimestamp * 1000).toISOString()
+          });
+          transactionHeader.expire = { atTime: new Date(expireTimestamp * 1000) };
+        }
+      }
+
       // Additional authorities — field 7 of TransactionHeader (repeatable URL)
       // When set, the Accumulate node requires signatures from BOTH the principal's
       // authority AND each additional authority before the transaction executes.

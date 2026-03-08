@@ -5098,6 +5098,8 @@ app.post('/api/v2/intents/prepare', async (req, res) => {
       public_key,  // Required for two-phase signing
       signer_key_page_url,
       additional_authorities,
+      expire_at_time,
+      transaction_metadata,
       gas_limit,
       max_gas_price,
       slippage_tolerance,
@@ -5189,6 +5191,8 @@ app.post('/api/v2/intents/prepare', async (req, res) => {
       proofClass: proof_class as 'on_demand' | 'on_cadence',
       executionMode: execution_mode as ExecutionMode,
       additionalAuthorities: additional_authorities,
+      expireAtTime: expire_at_time,
+      transactionMetadata: transaction_metadata,
       gasLimit: gas_limit,
       maxGasPrice: max_gas_price,
       slippageTolerance: slippage_tolerance,
