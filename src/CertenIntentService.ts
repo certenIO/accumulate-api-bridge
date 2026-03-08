@@ -1128,22 +1128,22 @@ export class CertenIntentService {
   }
 
   private isValidAddress(address: string): boolean {
-    // Basic validation for common address formats
-    if (address.startsWith('0x') && address.length === 42) {
-      return true; // Ethereum format
-    }
-
-    // Support Accumulate address formats:
-    // - acc://... URLs
-    // - Raw public key hashes (64 hex chars)
-    if (address.startsWith('acc://') && address.length > 6) {
-      return true; // Accumulate ADI/URL format
-    }
-
-    if (/^[a-fA-F0-9]{64}$/.test(address)) {
-      return true; // Accumulate public key hash format
-    }
-
+    // EVM: 0x + 40 hex chars
+    if (address.startsWith('0x') && address.length === 42) return true;
+    // Aptos / 0x-prefixed 64-char hex (Move-based chains)
+    if (address.startsWith('0x') && address.length === 66 && /^0x[a-fA-F0-9]{64}$/.test(address)) return true;
+    // Accumulate ADI/URL
+    if (address.startsWith('acc://') && address.length > 6) return true;
+    // Raw 64-char hex (Accumulate public key hash)
+    if (/^[a-fA-F0-9]{64}$/.test(address)) return true;
+    // Solana: base58, 32-44 chars
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) return true;
+    // TRON: T + 33 alphanumeric
+    if (/^T[a-zA-Z0-9]{33}$/.test(address)) return true;
+    // TON: workchain:hex (e.g. 0:abc... or -1:abc...)
+    if (/^-?\d+:[a-fA-F0-9]{64}$/.test(address)) return true;
+    // NEAR: lowercase alphanumeric with dots/dashes, 2-64 chars
+    if (/^[a-z0-9._-]{2,64}$/.test(address)) return true;
     return false;
   }
 
