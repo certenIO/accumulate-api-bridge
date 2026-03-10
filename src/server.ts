@@ -4439,6 +4439,156 @@ app.post('/api/v1/pending/:actionId/dismiss', async (req, res) => {
   }
 });
 
+// ==================== Signing Path Validation ====================
+
+/**
+ * POST /api/v1/signing-paths/validate
+ *
+ * Validate a signing path by checking each hop on-chain.
+ * For each hop URL, verifies:
+ *   - The account exists
+ *   - Current threshold and entry count
+ *   - Whether delegate entries still point to the next hop
+ *
+ * Request body:
+ *   { hops: string[] }  — ordered array of key page/book URLs in the path
+ *
+ * Response:
+ *   {
+ *     success: true,
+ *     valid: boolean,
+ *     hops: [{ url, exists, threshold, totalEntries, delegateIntact, creditBalance }],
+ *     brokenAt?: number  — index of first broken hop (if any)
+ *   }
+ */
+app.post('/api/v1/signing-paths/validate', async (req, res) => {
+  console.log('\n🔗 POST /api/v1/signing-paths/validate');
+
+  try {
+    const { hops } = req.body;
+
+    if (!hops || !Array.isArray(hops) || hops.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'hops array is required and must not be empty'
+      });
+    }
+
+    if (hops.length > 20) {
+      return res.status(400).json({
+        success: false,
+        error: 'hops array exceeds maximum delegation depth of 20'
+      });
+    }
+
+    console.log('  Hops:', hops.length, hops.map((h: string) => h.substring(0, 30) + '...'));
+
+    interface HopValidation {
+      url: string;
+      exists: boolean;
+      threshold: number;
+      totalEntries: number;
+      delegateIntact: boolean;
+      creditBalance: number;
+      error?: string;
+    }
+
+    const hopResults: HopValidation[] = [];
+    let pathValid = true;
+    let brokenAt: number | undefined;
+
+    for (let i = 0; i < hops.length; i++) {
+      const hopUrl = hops[i];
+      const nextHopUrl = i < hops.length - 1 ? hops[i + 1] : null;
+
+      try {
+        const accountResult = await accumulateService.getAccount(hopUrl);
+
+        if (!accountResult || !accountResult.success || !accountResult.account) {
+          hopResults.push({
+            url: hopUrl,
+            exists: false,
+            threshold: 0,
+            totalEntries: 0,
+            delegateIntact: false,
+            creditBalance: 0,
+            error: 'Account not found'
+          });
+          if (pathValid) { pathValid = false; brokenAt = i; }
+          continue;
+        }
+
+        const account = accountResult.account;
+        const threshold = account.acceptThreshold || account.threshold || 1;
+        const entries = account.entries || account.keys || [];
+        const totalEntries = entries.length;
+        const creditBalance = account.creditBalance || 0;
+
+        // If there's a next hop, check delegation integrity
+        let delegateIntact = true;
+        if (nextHopUrl) {
+          // Extract the key book URL from the next hop (delegate entries point to key books)
+          const nextBookUrl = nextHopUrl.replace(/\/\d+$/, '');
+
+          // Check if any entry in this page delegates to the next hop's key book
+          const hasDelegateToNext = entries.some((entry: any) => {
+            const delegateUrl = entry.delegate || entry.delegateUrl;
+            if (!delegateUrl) return false;
+            // Compare normalized: delegate entry might point to key book or key page
+            const normalizedDelegate = delegateUrl.toLowerCase().replace(/\/+$/, '');
+            const normalizedNextBook = nextBookUrl.toLowerCase().replace(/\/+$/, '');
+            const normalizedNextHop = nextHopUrl.toLowerCase().replace(/\/+$/, '');
+            return normalizedDelegate === normalizedNextBook || normalizedDelegate === normalizedNextHop;
+          });
+
+          if (!hasDelegateToNext) {
+            delegateIntact = false;
+            if (pathValid) { pathValid = false; brokenAt = i; }
+          }
+        }
+
+        hopResults.push({
+          url: hopUrl,
+          exists: true,
+          threshold,
+          totalEntries,
+          delegateIntact,
+          creditBalance,
+        });
+
+      } catch (hopError) {
+        hopResults.push({
+          url: hopUrl,
+          exists: false,
+          threshold: 0,
+          totalEntries: 0,
+          delegateIntact: false,
+          creditBalance: 0,
+          error: hopError instanceof Error ? hopError.message : 'Query failed'
+        });
+        if (pathValid) { pathValid = false; brokenAt = i; }
+      }
+    }
+
+    console.log('  Result: valid =', pathValid, ', hops validated =', hopResults.length);
+
+    res.json({
+      success: true,
+      valid: pathValid,
+      hops: hopResults,
+      ...(brokenAt !== undefined ? { brokenAt } : {}),
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to validate signing path:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 // ==================== Relationship Endpoints ====================
 
 /**
