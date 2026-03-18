@@ -1,6 +1,7 @@
 import { Logger } from './Logger.js';
 import { AccumulateService } from './AccumulateService.js';
 import crypto from 'crypto';
+import { ethers } from 'ethers'; // CRITICAL-003: For ABI encoding & keccak256 in executionPayload
 
 // Native token decimals per chain (EVM defaults to 18)
 const CHAIN_DECIMALS: Record<string, number> = {
@@ -659,12 +660,36 @@ export class CertenIntentService {
       // Always compute base units from amount + decimals (ignore pre-computed amountWei
       // which may have been calculated with wrong decimals by the frontend)
       const baseUnits = convertToBaseUnits(leg.amount, decimals);
+      const legChainId = leg.chainId || getChainId(leg.chain);
+
+      // CRITICAL-003: Compute executionPayload binding exact on-chain params into user-signed blob
+      // Only compute for EVM-compatible chains (non-EVM chains use different execution models)
+      const chainType = getChainType(leg.chain);
+      let execPayloadObj: any = undefined;
+      if (chainType === 'evm') {
+        try {
+          const execPayload = this.computeExecutionPayload({
+            tokenAddress: leg.tokenAddress,
+            toAddress: leg.toAddress,
+            amountWei: baseUnits,
+          }, legChainId);
+          execPayloadObj = {
+            "target": execPayload.target,
+            "value": execPayload.value,
+            "dataHash": execPayload.dataHash,
+            "chainId": legChainId,
+            "executionCommitment": execPayload.executionCommitment
+          };
+        } catch (e) {
+          // Non-EVM address format — skip executionPayload for this leg
+        }
+      }
 
       return {
         "legId": leg.legId,
         "role": leg.role || "destination",
         "chain": chainName,
-        "chainId": leg.chainId,
+        "chainId": legChainId,
         "network": chainName,
         "asset": {
           "symbol": leg.tokenSymbol || getChainSymbol(leg.chain),
@@ -693,6 +718,8 @@ export class CertenIntentService {
         "slippage_tolerance": slippageTolerance ? `${slippageTolerance}%` : "0.5%",
         "deadline_timestamp": Math.floor(Date.now() / 1000) + 3600,
         "accountOwner": leg.accountOwner,
+        // CRITICAL-003: Execution payload (EVM legs only)
+        ...(execPayloadObj ? { "executionPayload": execPayloadObj } : {}),
       };
     });
 
@@ -891,21 +918,130 @@ export class CertenIntentService {
   }
 
   /**
-   * Calculate operation_id from all 4 JSON blobs - CANONICAL SPEC IMPLEMENTATION
+   * Calculate operation_id from all 4 JSON blobs using length-prefixed canonical concatenation.
+   *
+   * CRITICAL-002: This MUST match the Go validator's ComputeCanonical4BlobHash() exactly.
+   *
+   * Algorithm:
+   *   SHA256(
+   *     len(canon(blob0)) || canon(blob0) ||
+   *     len(canon(blob1)) || canon(blob1) ||
+   *     len(canon(blob2)) || canon(blob2) ||
+   *     len(canon(blob3)) || canon(blob3)
+   *   )
+   *
+   * Where len(x) is a 4-byte big-endian uint32 of the byte length of x.
+   * canonical(x) is RFC 8785-compatible JSON: recursively sorted keys, no whitespace.
+   *
+   * This method is intentionally public so server.ts can call it for the /prepare endpoint.
    */
-  private calculateOperationIdFromBlobs(
+  public calculateOperationIdFromBlobs(
     intentData: any,
     crossChainData: any,
     governanceData: any,
     replayData: any
   ): string {
-    const payload = JSON.stringify([
-      intentData,
-      crossChainData,
-      governanceData,
-      replayData,
-    ]);
-    return '0x' + crypto.createHash('sha256').update(payload).digest('hex');
+    const blobs = [intentData, crossChainData, governanceData, replayData];
+    const hash = crypto.createHash('sha256');
+
+    for (const blob of blobs) {
+      // Canonical JSON: sort keys recursively, stringify with no whitespace
+      const canonical = Buffer.from(this.canonicalizeJSON(blob), 'utf8');
+      // 4-byte big-endian length prefix
+      const lenBuf = Buffer.alloc(4);
+      lenBuf.writeUInt32BE(canonical.length, 0);
+      hash.update(lenBuf);
+      hash.update(canonical);
+    }
+
+    return '0x' + hash.digest('hex');
+  }
+
+  /**
+   * CRITICAL-003: Compute executionPayload for a leg.
+   * Binds the exact on-chain execution parameters (target, value, calldata) into the
+   * user-signed Blob 1 (crossChainData). The validator reads this commitment and passes
+   * it to createAnchor(). The contract verifies it at executeWithGovernance() time.
+   *
+   * For native transfers: target=recipient, value=amount, data=empty
+   * For ERC-20 transfers: target=token, value=0, data=transfer(to,amount)
+   *
+   * executionCommitment = keccak256(abi.encodePacked(uint256 chainId, address target, uint256 value, bytes32 keccak256(data)))
+   * This MUST match the Solidity computation in CertenAnchorV4.executeWithGovernance()
+   * and the Go computation in computeExecutionCommitment().
+   */
+  public computeExecutionPayload(leg: {
+    tokenAddress?: string | null;
+    toAddress: string;
+    amountWei: string;
+  }, chainId: number): {
+    target: string;
+    value: string;
+    dataHash: string;
+    executionCommitment: string;
+  } {
+    let target: string;
+    let value: string;
+    let callData: Uint8Array;
+
+    if (leg.tokenAddress && leg.tokenAddress !== null) {
+      // ERC-20 transfer: target is token contract, value is 0, data is transfer(to, amount)
+      target = ethers.getAddress(leg.tokenAddress); // EIP-55 checksum
+      value = '0';
+      const iface = new ethers.Interface(['function transfer(address to, uint256 amount)']);
+      const encoded = iface.encodeFunctionData('transfer', [
+        ethers.getAddress(leg.toAddress),
+        BigInt(leg.amountWei)
+      ]);
+      callData = ethers.getBytes(encoded);
+    } else {
+      // Native transfer: target is recipient, value is amount, data is empty
+      target = ethers.getAddress(leg.toAddress); // EIP-55 checksum
+      value = leg.amountWei;
+      callData = new Uint8Array(0);
+    }
+
+    // keccak256(data)
+    const dataHash = ethers.keccak256(callData);
+
+    // keccak256(abi.encodePacked(uint256 chainId, address target, uint256 value, bytes32 dataHash))
+    // encodePacked: uint256(32) + address(20) + uint256(32) + bytes32(32) = 116 bytes
+    const packed = ethers.solidityPacked(
+      ['uint256', 'address', 'uint256', 'bytes32'],
+      [chainId, target, BigInt(value), dataHash]
+    );
+    const executionCommitment = ethers.keccak256(packed);
+
+    return { target, value, dataHash, executionCommitment };
+  }
+
+  /**
+   * RFC 8785-compatible canonical JSON serialization.
+   * Produces deterministic JSON with alphabetically sorted keys at every nesting level.
+   * This MUST match Go's commitment.CanonicalizeJSON() + json.Marshal() output exactly.
+   *
+   * Rules:
+   *   - Object keys: sorted alphabetically (Unicode code point order)
+   *   - No whitespace between tokens
+   *   - Numbers: use JSON.stringify default representation (no trailing .0)
+   *   - Strings: JSON.stringify handles escaping identically to Go's json.Marshal
+   *   - null/boolean: literal JSON tokens
+   *   - Arrays: preserve element order, recurse into elements
+   */
+  private canonicalizeJSON(obj: any): string {
+    if (obj === null || obj === undefined) return 'null';
+    if (typeof obj === 'boolean') return obj ? 'true' : 'false';
+    if (typeof obj === 'number') return JSON.stringify(obj);
+    if (typeof obj === 'string') return JSON.stringify(obj);
+    if (Array.isArray(obj)) {
+      return '[' + obj.map(item => this.canonicalizeJSON(item)).join(',') + ']';
+    }
+    // Object: sort keys alphabetically and recurse
+    const sortedKeys = Object.keys(obj).sort();
+    const entries = sortedKeys.map(key => {
+      return JSON.stringify(key) + ':' + this.canonicalizeJSON(obj[key]);
+    });
+    return '{' + entries.join(',') + '}';
   }
 
   /**
@@ -1012,7 +1148,15 @@ export class CertenIntentService {
     // data[1]: crossChainData - Protocol v1.0 legs model
     const chainDecimals = getChainDecimals(intent.toChain);
     const amountWei = convertToBaseUnits(intent.amount, chainDecimals);
-    const legId = `leg-${intent.toChain.toLowerCase()}-${intent.toChainId || getChainId(intent.toChain)}-1`;
+    const legChainId = intent.toChainId || getChainId(intent.toChain);
+    const legId = `leg-${intent.toChain.toLowerCase()}-${legChainId}-1`;
+
+    // CRITICAL-003: Compute executionPayload binding exact on-chain params into user-signed blob
+    const execPayload = this.computeExecutionPayload({
+      tokenAddress: intent.tokenAddress,
+      toAddress: intent.toAddress,
+      amountWei: amountWei,
+    }, legChainId);
 
     const crossChainData = {
       "protocol": "CERTEN",
@@ -1055,7 +1199,15 @@ export class CertenIntentService {
             "gas_estimation_buffer": 1.2                  // MISSING: safety buffer multiplier
           },
           "slippage_tolerance": "0.5%",                   // MISSING: slippage tolerance
-          "deadline_timestamp": Math.floor(Date.now() / 1000) + 3600 // MISSING: execution deadline
+          "deadline_timestamp": Math.floor(Date.now() / 1000) + 3600, // MISSING: execution deadline
+          // CRITICAL-003: Execution payload binding — cryptographic commitment to exact on-chain params
+          "executionPayload": {
+            "target": execPayload.target,
+            "value": execPayload.value,
+            "dataHash": execPayload.dataHash,
+            "chainId": legChainId,
+            "executionCommitment": execPayload.executionCommitment
+          }
         }
       ],
       "atomicity": {

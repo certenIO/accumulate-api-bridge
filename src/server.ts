@@ -1860,7 +1860,27 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
     // Convert amount to base units using chain-specific decimals
     const chainDecimals = getChainDecimals(intent.toChain || 'ethereum');
     const amountWei = convertToBaseUnits(intent.amount, chainDecimals);
-    const legId = `leg-${(intent.toChain || 'ethereum').toLowerCase()}-${intent.toChainId || getChainId(intent.toChain || 'ethereum')}-1`;
+    const legChainId = intent.toChainId || getChainId(intent.toChain || 'ethereum');
+    const legId = `leg-${(intent.toChain || 'ethereum').toLowerCase()}-${legChainId}-1`;
+
+    // CRITICAL-003: Compute executionPayload for the prepare endpoint
+    let prepareExecPayload: any = undefined;
+    try {
+      const ep = certenIntentService.computeExecutionPayload({
+        tokenAddress: intent.tokenAddress,
+        toAddress: intent.toAddress,
+        amountWei: amountWei,
+      }, legChainId);
+      prepareExecPayload = {
+        target: ep.target,
+        value: ep.value,
+        dataHash: ep.dataHash,
+        chainId: legChainId,
+        executionCommitment: ep.executionCommitment
+      };
+    } catch (e) {
+      // Non-EVM address — skip executionPayload
+    }
 
     // data[0]: intentData - Protocol metadata, proof_class, descriptions
     const intentData = {
@@ -1934,7 +1954,9 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
             gas_estimation_buffer: 1.2
           },
           slippage_tolerance: "0.5%",
-          deadline_timestamp: expiresAtSeconds
+          deadline_timestamp: expiresAtSeconds,
+          // CRITICAL-003: Execution payload binding
+          ...(prepareExecPayload ? { executionPayload: prepareExecPayload } : {})
         }
       ],
       atomicity: {
@@ -2010,9 +2032,8 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
       }
     };
 
-    // Calculate operation_id from all 4 blobs (sha256 of concatenated JSON)
-    const operationIdPayload = JSON.stringify([intentData, crossChainData, governanceData, replayData]);
-    const operationId = '0x' + crypto.createHash('sha256').update(operationIdPayload).digest('hex');
+    // CRITICAL-002: Use canonical length-prefixed hash matching Go validator's ComputeCanonical4BlobHash()
+    const operationId = certenIntentService.calculateOperationIdFromBlobs(intentData, crossChainData, governanceData, replayData);
 
     // Update replayData with calculated operation_id
     replayData.intent_hash = operationId;
