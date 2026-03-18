@@ -804,7 +804,7 @@ export class CertenIntentService {
     // data[3]: replayData
     const nowMs = Date.now();
     const nowSeconds = Math.floor(nowMs / 1000);
-    const nonce = `certen_multileg_${nowMs}_${Math.random().toString(36).substring(7)}`;
+    const nonce = `certen_multileg_${nowMs}_${crypto.randomBytes(16).toString('hex')}`; // MEDIUM-003: CSPRNG
     const expiresAtSeconds = nowSeconds + (expirationMinutes * 60);
 
     const replayData = {
@@ -1266,7 +1266,7 @@ export class CertenIntentService {
     // See pkg/consensus/intent.go:152-153 - ReplayData.CreatedAt/ExpiresAt are int64 seconds
     const nowMs = Date.now();
     const nowSeconds = Math.floor(nowMs / 1000);  // Convert to Unix SECONDS
-    const nonce = `certen_${nowMs}_${Math.random().toString(36).substring(7)}`;
+    const nonce = `certen_${nowMs}_${crypto.randomBytes(16).toString('hex')}`; // MEDIUM-003: CSPRNG
     const expiresAtSeconds = nowSeconds + (expirationMinutes * 60);  // SECONDS, not ms
 
     const replayData = {

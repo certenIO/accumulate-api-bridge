@@ -1855,7 +1855,7 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
     const nowSeconds = Math.floor(nowMs / 1000);
     const expirationMins = expirationMinutes || 95;
     const expiresAtSeconds = nowSeconds + (expirationMins * 60);
-    const nonce = `certen_${nowMs}_${Math.random().toString(36).substring(7)}`;
+    const nonce = `certen_${nowMs}_${crypto.randomBytes(16).toString('hex')}`; // MEDIUM-003: CSPRNG
 
     // Convert amount to base units using chain-specific decimals
     const chainDecimals = getChainDecimals(intent.toChain || 'ethereum');
