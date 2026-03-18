@@ -27,7 +27,7 @@ function getChainSymbol(chain: string): string {
 }
 
 /** Returns the chain type for per-chain intent formatting */
-function getChainType(chain: string): 'evm' | 'solana' | 'near' | 'tron' | 'aptos' | 'sui' | 'ton' {
+export function getChainType(chain: string): 'evm' | 'solana' | 'near' | 'tron' | 'aptos' | 'sui' | 'ton' {
   const lower = chain.toLowerCase();
   if (lower.includes('solana')) return 'solana';
   if (lower.includes('near')) return 'near';
@@ -695,11 +695,13 @@ export class CertenIntentService {
           "symbol": leg.tokenSymbol || getChainSymbol(leg.chain),
           "decimals": decimals,
           "native": !leg.tokenAddress,
-          "contract_address": leg.tokenAddress || null,
+          "contract_address": leg.tokenAddress
+            ? this.normalizeAddress(leg.tokenAddress, chainType)
+            : null,
           "verified": true
         },
-        "from": leg.fromAddress,
-        "to": leg.toAddress,
+        "from": this.normalizeAddress(leg.fromAddress, chainType),
+        "to": this.normalizeAddress(leg.toAddress, chainType),
         "amountEth": leg.amount,
         "amountWei": baseUnits,
         [`amount_${baseUnitName}`]: baseUnits,
@@ -1173,11 +1175,13 @@ export class CertenIntentService {
             "symbol": intent.tokenSymbol || getChainSymbol(intent.toChain),
             "decimals": chainDecimals,
             "native": !intent.tokenAddress,
-            "contract_address": intent.tokenAddress || null,
+            "contract_address": intent.tokenAddress
+              ? this.normalizeAddress(intent.tokenAddress, getChainType(intent.toChain))
+              : null,
             "verified": true
           },
-          "from": intent.fromAddress,
-          "to": intent.toAddress,
+          "from": this.normalizeAddress(intent.fromAddress, getChainType(intent.toChain)),
+          "to": this.normalizeAddress(intent.toAddress, getChainType(intent.toChain)),
           "amountEth": intent.amount,
           "amountWei": amountWei,
           "execution_sequence": 1,                         // MISSING: execution order
@@ -1393,8 +1397,10 @@ export class CertenIntentService {
   }
 
   private isValidAddress(address: string): boolean {
-    // EVM: 0x + 40 hex chars
-    if (address.startsWith('0x') && address.length === 42) return true;
+    // EVM: 0x + 40 hex chars — validate with EIP-55 checksum
+    if (address.startsWith('0x') && address.length === 42) {
+      try { ethers.getAddress(address); return true; } catch { return false; }
+    }
     // Aptos / 0x-prefixed 64-char hex (Move-based chains)
     if (address.startsWith('0x') && address.length === 66 && /^0x[a-fA-F0-9]{64}$/.test(address)) return true;
     // Accumulate ADI/URL
@@ -1410,6 +1416,25 @@ export class CertenIntentService {
     // NEAR: lowercase alphanumeric with dots/dashes, 2-64 chars
     if (/^[a-z0-9._-]{2,64}$/.test(address)) return true;
     return false;
+  }
+
+  /**
+   * MEDIUM-002: Normalize an address to a canonical form before inclusion in blobs.
+   * EVM addresses are checksummed via EIP-55 (ethers.getAddress).
+   * Non-EVM addresses are lowercased for consistency.
+   * This ensures the same address always produces the same commitment hash
+   * regardless of how the client submitted it (mixed case, lowercase, etc).
+   */
+  public normalizeAddress(address: string, chainType: string): string {
+    if (chainType === 'evm') {
+      try {
+        return ethers.getAddress(address); // EIP-55 checksum
+      } catch {
+        return address; // Not a valid EVM address — return as-is
+      }
+    }
+    // Non-EVM chains: lowercase for consistency
+    return address.toLowerCase();
   }
 
   private convertEthToWei(ethAmount: string): string {

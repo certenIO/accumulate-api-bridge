@@ -14,7 +14,7 @@ import crypto from 'crypto';
 import { ethers } from 'ethers';
 import { AccumulateService } from './AccumulateService.js';
 import { AdiStorageService } from './AdiStorageService.js';
-import { CertenIntentService, CreateIntentRequest, CreateMultiLegIntentRequest, IntentLeg, ExecutionMode } from './CertenIntentService.js';
+import { CertenIntentService, CreateIntentRequest, CreateMultiLegIntentRequest, IntentLeg, ExecutionMode, getChainType } from './CertenIntentService.js';
 import { getChainHandler, getAllChainHandlers, getRegisteredChainIds } from './chains/index.js';
 import { VALIDATOR_ADDRESSES, CHAIN_HANDLER_IDS, NON_EVM_CHAINS } from './chains/validator-addresses.js';
 
@@ -1928,11 +1928,13 @@ app.post('/api/v1/intent/prepare', async (req, res) => {
             symbol: intent.tokenSymbol || getChainSymbol(intent.toChain || 'ethereum'),
             decimals: chainDecimals,
             native: !intent.tokenAddress,
-            contract_address: intent.tokenAddress || null,
+            contract_address: intent.tokenAddress
+              ? certenIntentService.normalizeAddress(intent.tokenAddress, getChainType(intent.toChain || 'ethereum'))
+              : null,
             verified: true
           },
-          from: intent.fromAddress,
-          to: intent.toAddress,
+          from: certenIntentService.normalizeAddress(intent.fromAddress, getChainType(intent.toChain || 'ethereum')),
+          to: certenIntentService.normalizeAddress(intent.toAddress, getChainType(intent.toChain || 'ethereum')),
           amountEth: intent.amount,
           amountWei: amountWei,
           execution_sequence: 1,
