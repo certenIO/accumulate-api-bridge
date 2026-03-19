@@ -286,7 +286,7 @@ export class EvmChainHandler implements ChainHandler {
 // ---- EVM chain configurations ----
 // V6 Factory: creates CertenAccountV4 with execution commitment verification
 // Deployed via Nick's CREATE2 — deterministic cross-chain address
-const V6_FACTORY = '0x81690a11b356E196A5caEF59792f1d2485Bde316';
+const V6_FACTORY = '0x9a8e3df1Da609CC1e7A3fA8df2B623266A6d5Da3';
 // Legacy V5 Factory (kept for reference only)
 // const V6_FACTORY = '0x2e6037afFA783d487664b2440c691fc86Bc18A17';
 
