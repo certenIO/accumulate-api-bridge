@@ -59,9 +59,9 @@ function getChainAnchorInfo(chain: string, evmAnchorAddress: string): Record<str
     case 'solana':
       return {
         type: 'solana_program',
-        programId: process.env.SOLANA_ANCHOR_PROGRAM_ID || '2JcPAjzBp2rdHK6AAsdw5ArrDeB1aw6fFufk7C1tYnNj',
+        programId: process.env.SOLANA_ANCHOR_PROGRAM_ID || 'G9L6ns63gJGXeQWfzmkGHQtDbFMSNthWiybM69n4eYBJ',
         blsVerifier: process.env.SOLANA_BLS_VERIFIER_PROGRAM_ID || '2uYnieNHceDYc1LWJsM11SYUK9hDCDrH5pfQjh5m2Hoa',
-        accountFactory: process.env.SOLANA_ACCOUNT_FACTORY_PROGRAM_ID || 'FBcWmM1w7wJ9gmzEMNhDFCVKGryGaM8yYuDfjGpdD1Nc',
+        accountFactory: process.env.SOLANA_ACCOUNT_FACTORY_PROGRAM_ID || 'HYjh3ygUSFkd8EU8VrEbeKttCWSVxEsAT5zNqhBvS4BW',
         version: 'v1.0',
       };
     case 'near':

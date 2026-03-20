@@ -17,10 +17,11 @@ const CHAIN_IDS = ['solana-devnet'];
 const CHAIN_NAME = 'Solana Devnet';
 const EXPLORER_URL = 'https://solscan.io';
 
-// Program IDs
-const DEFAULT_FACTORY_PROGRAM = 'FBcWmM1w7wJ9gmzEMNhDFCVKGryGaM8yYuDfjGpdD1Nc';
-const DEFAULT_ACCOUNT_PROGRAM = 'DivFgpvEQyVJSUuVDHEGGXZYn13h8zRVadQLRfaSoQvS';
-const DEFAULT_ANCHOR_V4_PROGRAM = '2JcPAjzBp2rdHK6AAsdw5ArrDeB1aw6fFufk7C1tYnNj';
+// Program IDs (V5/V2 - security audit upgrade)
+// PLACEHOLDER: Replace with actual program IDs after deployment
+const DEFAULT_FACTORY_PROGRAM = 'HYjh3ygUSFkd8EU8VrEbeKttCWSVxEsAT5zNqhBvS4BW';
+const DEFAULT_ACCOUNT_PROGRAM = 'H1T2GepZMApYSJThusiSmX9Yb8VpkuVzTUSEbnBT44Xs';
+const DEFAULT_ANCHOR_V4_PROGRAM = 'G9L6ns63gJGXeQWfzmkGHQtDbFMSNthWiybM69n4eYBJ';
 const DEFAULT_BLS_VERIFIER_PROGRAM = '2uYnieNHceDYc1LWJsM11SYUK9hDCDrH5pfQjh5m2Hoa';
 
 // PDA seeds (must match the Anchor program's constants)
