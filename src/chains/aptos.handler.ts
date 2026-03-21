@@ -45,7 +45,7 @@ export class AptosChainHandler implements ChainHandler {
    */
   private async computeAddressLocally(adiUrl: string, ownerHex: string, salt: bigint): Promise<string> {
     // Fetch FactoryState resource to get deployer_address and anchor_contract
-    const resourceType = `${this.factoryPackage}::certen_account_factory::FactoryState`;
+    const resourceType = `${this.factoryPackage}::certen_account_factory_v2::FactoryStateV2`;
     const url = `${this.rpcUrl.replace(/\/v1\/?$/, '')}/v1/accounts/${this.factoryPackage}/resource/${resourceType}`;
     const resp = await fetch(url);
     if (!resp.ok) {
@@ -90,7 +90,7 @@ export class AptosChainHandler implements ChainHandler {
       const adiUrlBytes = Array.from(Buffer.from(adiUrl, 'utf-8'));
       const result = await aptos.view({
         payload: {
-          function: `${this.factoryPackage}::certen_account_factory::get_address`,
+          function: `${this.factoryPackage}::certen_account_factory_v2::get_address`,
           typeArguments: [],
           functionArguments: [this.factoryPackage, ownerHex, MoveVector.U8(adiUrlBytes), salt.toString()],
         }
@@ -101,7 +101,7 @@ export class AptosChainHandler implements ChainHandler {
       // Check if the abstract account is initialized (has AccountState resource)
       let isDeployed = false;
       try {
-        const resourceType = `${this.factoryPackage}::certen_account_v2::AccountState` as `${string}::${string}::${string}`;
+        const resourceType = `${this.factoryPackage}::certen_account_v3::AccountStateV3` as `${string}::${string}::${string}`;
         await aptos.getAccountResource({ accountAddress: predictedAddress, resourceType });
         isDeployed = true;
       } catch {
@@ -160,7 +160,7 @@ export class AptosChainHandler implements ChainHandler {
     const txn = await aptos.transaction.build.simple({
       sender: sponsorAccount.accountAddress,
       data: {
-        function: `${this.factoryPackage}::certen_account_factory::create_account`,
+        function: `${this.factoryPackage}::certen_account_factory_v2::create_account`,
         typeArguments: [],
         functionArguments: [this.factoryPackage, ownerHex, MoveVector.U8(adiUrlBytes), salt.toString()],
       },
