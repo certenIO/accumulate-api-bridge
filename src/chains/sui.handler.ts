@@ -26,8 +26,8 @@ export class SuiChainHandler implements ChainHandler {
   private rpcUrl: string;
 
   constructor() {
-    this.factoryPackage = process.env.SUI_FACTORY_PACKAGE || '0xf9f8f5c8349e04404631531f2420cd45805934839867daa1f4c043ec06b6ade2';
-    this.factoryObjectId = process.env.SUI_FACTORY_OBJECT || '0x136a403bca2bedeaa7dc8c5b95e48a25071f4945cee7765ac1cf4971683266e2';
+    this.factoryPackage = process.env.SUI_FACTORY_PACKAGE || '0xe84a6bd435e09b8277f70092cd7cd2dee8f8a40ac97d46ccbc170ed1589e9973';
+    this.factoryObjectId = process.env.SUI_FACTORY_OBJECT || '0x68993cb93efd2e6d5a1b1dff77debc3598d5b6c5bbdd4dac0c0026fdb0b6bfde';
     this.rpcUrl = process.env.SUI_TESTNET_RPC_URL || getJsonRpcFullnodeUrl('testnet');
   }
 
@@ -50,7 +50,7 @@ export class SuiChainHandler implements ChainHandler {
       // registry rather than predicting an address.
       const tx = new Transaction();
       tx.moveCall({
-        target: `${this.factoryPackage}::certen_account_factory::get_account_for_adi`,
+        target: `${this.factoryPackage}::certen_account_factory_v2::get_account_for_adi`,
         arguments: [
           tx.object(this.factoryObjectId),
           tx.pure.string(adiUrl),
@@ -137,7 +137,7 @@ export class SuiChainHandler implements ChainHandler {
         transactionBlock: (() => {
           const t = new Transaction();
           t.moveCall({
-            target: `${this.factoryPackage}::certen_account_factory::get_deployment_fee`,
+            target: `${this.factoryPackage}::certen_account_factory_v2::get_deployment_fee`,
             arguments: [t.object(this.factoryObjectId)],
           });
           return t as any;
@@ -158,7 +158,7 @@ export class SuiChainHandler implements ChainHandler {
     const tx = new Transaction();
     const [paymentCoin] = tx.splitCoins(tx.gas, [deploymentFee]);
     tx.moveCall({
-      target: `${this.factoryPackage}::certen_account_factory::create_account`,
+      target: `${this.factoryPackage}::certen_account_factory_v2::create_account`,
       arguments: [
         tx.object(this.factoryObjectId),       // factory: &mut Factory
         tx.object('0x6'),                       // clock: &Clock
@@ -213,12 +213,12 @@ export class SuiChainHandler implements ChainHandler {
     try {
       const client = this.getClient();
 
-      // CertenAccountV2 stores SUI internally in its sui_balance field.
+      // CertenAccountV3 stores SUI internally in its sui_balance field.
       // Query it via the contract's get_balance view function.
       try {
         const tx = new Transaction();
         tx.moveCall({
-          target: `${this.factoryPackage}::certen_account_v2::get_balance`,
+          target: `${this.factoryPackage}::certen_account_v3::get_balance`,
           arguments: [tx.object(address)],
         });
         const inspectResult = await client.devInspectTransactionBlock({
@@ -234,7 +234,7 @@ export class SuiChainHandler implements ChainHandler {
           }
         }
       } catch {
-        // Not a CertenAccountV2 or devInspect failed — fall through to native balance
+        // Not a CertenAccountV3 or devInspect failed — fall through to native balance
       }
 
       // Fallback: check native coin balance (for regular addresses)
