@@ -1433,7 +1433,11 @@ export class CertenIntentService {
         return address; // Not a valid EVM address — return as-is
       }
     }
-    // Non-EVM chains: lowercase for consistency
+    // TON addresses use case-sensitive base64url encoding — do NOT lowercase
+    if (chainType === 'ton') {
+      return address;
+    }
+    // Other non-EVM chains: lowercase for consistency
     return address.toLowerCase();
   }
 
