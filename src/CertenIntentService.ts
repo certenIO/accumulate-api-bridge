@@ -1437,6 +1437,10 @@ export class CertenIntentService {
     if (chainType === 'ton') {
       return address;
     }
+    // TRON addresses use case-sensitive Base58Check encoding — do NOT lowercase
+    if (chainType === 'tron') {
+      return address;
+    }
     // Other non-EVM chains: lowercase for consistency
     return address.toLowerCase();
   }
