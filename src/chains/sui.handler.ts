@@ -213,8 +213,15 @@ export class SuiChainHandler implements ChainHandler {
     try {
       const client = this.getClient();
 
+      // Step 1: Sweep any loose Coin<SUI> objects owned by the shared object.
+      // When someone sends SUI to the account's shared object address via a
+      // standard wallet transfer, the coins arrive as separate Coin<SUI> objects
+      // owned by the shared object — invisible to the contract's internal
+      // sui_balance. We sweep them in before reading the balance.
+      await this.sweepLooseCoins(client, address);
+
+      // Step 2: Read the contract's internal balance via get_balance view function.
       // CertenAccountV3 stores SUI internally in its sui_balance field.
-      // Query it via the contract's get_balance view function.
       try {
         const tx = new Transaction();
         tx.moveCall({
@@ -243,6 +250,69 @@ export class SuiChainHandler implements ChainHandler {
       return { address, balance: balanceSui.toFixed(6), symbol: 'SUI' };
     } catch (e: any) {
       return { address, balance: '0', symbol: 'SUI', error: e.message };
+    }
+  }
+
+  /**
+   * Sweeps loose Coin<SUI> objects owned by a CertenAccountV3 shared object
+   * into the account's internal vault (sui_balance).
+   *
+   * When users send SUI directly to the shared object address via a wallet,
+   * the coins sit as separate objects that the contract can't see. This method
+   * queries those loose coins and calls sweep_coin() for each one in a single
+   * programmable transaction block.
+   */
+  private async sweepLooseCoins(client: SuiJsonRpcClient, accountAddress: string): Promise<void> {
+    if (!this.isSponsorConfigured()) {
+      return; // Can't sweep without a sponsor to pay gas
+    }
+
+    try {
+      // Query Coin<SUI> objects owned by the shared object address
+      const coins = await client.getCoins({
+        owner: accountAddress,
+        coinType: '0x2::sui::SUI',
+      } as any);
+
+      const coinList = (coins as any)?.data || [];
+      if (coinList.length === 0) {
+        return; // No loose coins to sweep
+      }
+
+      console.log(`  🧹 Sweeping ${coinList.length} loose SUI coin(s) into account ${accountAddress}`);
+
+      // Build a PTB that sweeps all loose coins in one transaction
+      const tx = new Transaction();
+      for (const coin of coinList) {
+        tx.moveCall({
+          target: `${this.factoryPackage}::certen_account_v3::sweep_coin`,
+          arguments: [
+            tx.object(accountAddress),        // account: &mut CertenAccountV3
+            tx.object(coin.coinObjectId),     // coin: Coin<SUI>
+          ],
+        });
+      }
+
+      // Execute as sponsored transaction
+      const sponsorKeyStr = process.env.SUI_SPONSOR_PRIVATE_KEY!;
+      const { secretKey } = decodeSuiPrivateKey(sponsorKeyStr);
+      const keypair = Ed25519Keypair.fromSecretKey(secretKey);
+
+      const result = await client.signAndExecuteTransaction({
+        signer: keypair,
+        transaction: tx,
+      });
+
+      const digest = (result as any).digest || '';
+      if (digest) {
+        await client.waitForTransaction({ digest });
+        console.log(`  ✅ Sweep complete: ${digest}`);
+      }
+    } catch (err: any) {
+      // Sweep is best-effort — don't fail the balance check if sweep fails.
+      // Common failure: getCoins may not support shared object owners on all
+      // Sui versions. The balance will still show the internal vault amount.
+      console.warn(`  ⚠️ Sweep failed (non-fatal): ${err.message}`);
     }
   }
 
