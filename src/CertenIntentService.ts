@@ -5,14 +5,17 @@ import { ethers } from 'ethers'; // CRITICAL-003: For ABI encoding & keccak256 i
 
 // Native token decimals per chain (EVM defaults to 18)
 const CHAIN_DECIMALS: Record<string, number> = {
-  'tron': 6, 'tron mainnet': 6, 'tron-mainnet': 6,
-  'tron shasta': 6, 'tron-shasta': 6, 'tron shasta testnet': 6, 'tron-testnet': 6, 'tron testnet': 6,
+  'tron': 6, 'tron-mainnet': 6, 'tron-shasta': 6, 'tron-testnet': 6,
   'solana': 9, 'solana-mainnet': 9, 'solana-testnet': 9, 'solana-devnet': 9,
   'near': 24, 'near-mainnet': 24, 'near-testnet': 24,
+  'aptos': 8, 'aptos-mainnet': 8, 'aptos-testnet': 8,
+  'sui': 9, 'sui-mainnet': 9, 'sui-testnet': 9,
+  'ton': 9, 'ton-mainnet': 9, 'ton-testnet': 9,
 };
 
 function getChainDecimals(chain: string): number {
-  return CHAIN_DECIMALS[chain.toLowerCase()] ?? 18;
+  const normalized = chain.toLowerCase().replace(/\s+/g, '-');
+  return CHAIN_DECIMALS[normalized] ?? 18;
 }
 
 function getChainSymbol(chain: string): string {
