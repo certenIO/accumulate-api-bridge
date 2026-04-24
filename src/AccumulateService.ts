@@ -46,20 +46,6 @@ const getSDKUrl = () => {
   return '/typescript-sdk-accumulate/lib';
 };
 
-/**
- * Accumulate protocol varint encoding (LEB128, unsigned).
- * Used to length-prefix the signer URL in the pending multi-sig metadata hash.
- */
-function encodeVarint(value: number): Buffer {
-  const bytes: number[] = [];
-  while (value > 0x7f) {
-    bytes.push((value & 0x7f) | 0x80);
-    value >>>= 7;
-  }
-  bytes.push(value & 0xff);
-  return Buffer.from(bytes);
-}
-
 export class AccumulateService {
   private logger: Logger;
   private client: any;
@@ -4778,35 +4764,35 @@ export class AccumulateService {
       // Generate or use provided timestamp (microseconds)
       const timestamp = providedTimestamp || this.getNextTimestamp();
 
-      // Compute dataForSignature using the PENDING MULTI-SIG algorithm.
-      //
-      //   metadataHash     = SHA256(varintLen(signerUrl) || signerUrl || signerVersionLE8 || timestampLE8)
-      //   dataForSignature = SHA256(txHash || metadataHash)
-      //
-      // This is distinct from fresh-transaction signing (SDK `signRaw`), which uses
-      // `SHA256(encode(ED25519Signature) || tx.hash())`. Accumulate's network verifier
-      // for a signature *added to an existing pending transaction* expects the custom
-      // metadata encoding above — pubkey/vote/type are NOT part of the signed hash,
-      // only signer URL + version + timestamp. The KeyVault signer implements this
-      // same algorithm in `computeDataForSignature`; they must match byte-for-byte.
-      const signerUrlStr = typeof signerId === 'string' ? signerId : AccURL.parse(signerId).toString();
-      const signerUrlBytes = Buffer.from(signerUrlStr, 'utf8');
-      const lenVarint = encodeVarint(signerUrlBytes.length);
-      const versionLE = Buffer.alloc(8);
-      versionLE.writeBigUInt64LE(BigInt(signerVersion));
-      const timestampLE = Buffer.alloc(8);
-      timestampLE.writeBigUInt64LE(BigInt(timestamp));
-      const metadataInput = Buffer.concat([lenVarint, signerUrlBytes, versionLE, timestampLE]);
-      const metadataHash = Buffer.from(sha256(metadataInput));
+      // Convert public key from hex to bytes
+      const publicKeyBytes = Buffer.from(publicKey.replace(/^0x/, ''), 'hex');
 
+      // Create a properly typed ED25519Signature object for encoding
+      // This ensures the encoding matches what Accumulate expects
+      // IMPORTANT: sigMdHash includes type, publicKey, signer, signerVersion, timestamp, AND vote
+      const signerUrl = AccURL.parse(signerId);
+      const signatureObj = new ED25519Signature({
+        publicKey: publicKeyBytes,
+        signer: signerUrl,
+        signerVersion: signerVersion,
+        timestamp: timestamp,
+        vote: voteCode
+      });
+
+      // Compute signature metadata hash using the SDK's encode function
+      const sigMdHash = sha256(encode(signatureObj));
+
+      // Compute the complete dataForSignature: SHA256(sigMdHash + txHash)
+      // This matches the Go verification (signingHash), TypeScript SDK (signRaw),
+      // and the working Dart mobile app (dataForSignature method).
+      // IMPORTANT: Use the full transaction hash (not just body hash), and
+      // sigMdHash comes FIRST, then the transaction hash.
       const txHashBytes = Buffer.from(hashPart, 'hex');
-      const dataForSignatureBytes = sha256(Buffer.concat([txHashBytes, metadataHash]));
+      const dataForSignatureBytes = sha256(Buffer.concat([
+        Buffer.from(sigMdHash),
+        txHashBytes
+      ]));
       const dataForSignature = Buffer.from(dataForSignatureBytes).toString('hex');
-
-      // Unused by the custom algorithm; publicKey is only needed so the submit-side
-      // can populate the sigObject, which the caller will pass separately.
-      void publicKey;
-      void voteCode;
 
       this.logger.info('🔐 Computed signing data for pending transaction', {
         txHash: hashPart,
