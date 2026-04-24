@@ -1318,6 +1318,37 @@ export class AccumulateService {
         hashToSignHex: hashToSignHex.substring(0, 16) + '...'
       });
 
+      // === TEMP DEBUG: capture exact body/header bytes for delegate-encoding investigation ===
+      try {
+        const hasDelegate = transformedOperations.some((o: any) => o?.entry?.delegate);
+        if (hasDelegate) {
+          const headerBytes = encode(transaction.header);
+          const bodyBytes = encode(transaction.body);
+          const sigMdBytes = encode(signatureObject);
+          this.logger.info('🔬 [DEBUG-PREPARE] Delegate update encoding snapshot', {
+            requestId: 'pending-' + Date.now(),
+            keyPageUrl,
+            signerUrl,
+            keyPageVersion: keyPageInfo.version,
+            timestamp: validMicros,
+            headerBytesHex: Buffer.from(headerBytes).toString('hex'),
+            headerHashHex: Buffer.from(sha256(headerBytes)).toString('hex'),
+            bodyBytesHex: Buffer.from(bodyBytes).toString('hex'),
+            bodyHashHex: Buffer.from(sha256(bodyBytes)).toString('hex'),
+            sigMdBytesHex: Buffer.from(sigMdBytes).toString('hex'),
+            sigMdHashHex: Buffer.from(sigMdHash).toString('hex'),
+            transactionHashHex,
+            hashToSignHex,
+            transactionAsObject: JSON.stringify(transaction.asObject?.() ?? transaction),
+          });
+        }
+      } catch (debugErr) {
+        this.logger.warn('🔬 [DEBUG-PREPARE] Failed to log delegate snapshot', {
+          error: debugErr instanceof Error ? debugErr.message : String(debugErr),
+        });
+      }
+      // === END TEMP DEBUG ===
+
       // Generate a unique request ID
       const requestId = `keypage_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -1433,13 +1464,74 @@ export class AccumulateService {
         timestamp: sigObject.timestamp
       });
 
+      // === TEMP DEBUG: re-encode at submit time and dump raw RPC traffic for delegate ops ===
+      const hasDelegate = (prepared.operations as any[])?.some((o: any) => o?.entry?.delegate);
+      let rpcDebugRestore: { client: any; prev: any } | null = null;
+      try {
+        if (hasDelegate) {
+          const reHeaderBytes = encode(prepared.transaction.header);
+          const reBodyBytes = encode(prepared.transaction.body);
+          const reTxHashHex = Buffer.from(prepared.transaction.hash()).toString('hex');
+          this.logger.info('🔬 [DEBUG-SUBMIT] Delegate update re-encoded at submit time', {
+            requestId,
+            cachedBodyHashHex_at_prepare: prepared.sigMdHash, // for reference
+            cachedTxHashHex: prepared.transactionHash,
+            reHeaderBytesHex: Buffer.from(reHeaderBytes).toString('hex'),
+            reHeaderHashHex: Buffer.from(sha256(reHeaderBytes)).toString('hex'),
+            reBodyBytesHex: Buffer.from(reBodyBytes).toString('hex'),
+            reBodyHashHex: Buffer.from(sha256(reBodyBytes)).toString('hex'),
+            reTxHashHex,
+            txHashMatchesCached: reTxHashHex === prepared.transactionHash,
+            sigObjectShape: {
+              signer: String(sigObject.signer),
+              signerVersion: sigObject.signerVersion,
+              timestamp: sigObject.timestamp,
+              publicKeyHex: Buffer.from(publicKeyBytes).toString('hex'),
+              signatureHex: Buffer.from(signatureBytes).toString('hex'),
+            },
+            transactionAsObject: JSON.stringify(prepared.transaction.asObject?.() ?? prepared.transaction),
+          });
+          // Enable raw JSON-RPC debug for this submit so we capture the wire payload + response
+          const rpc = (this.client as any)?._rpcClient;
+          if (rpc) {
+            rpcDebugRestore = { client: rpc, prev: rpc.debug };
+            rpc.debug = true;
+            this.logger.info('🔬 [DEBUG-SUBMIT] RPC debug enabled for this submit (look for "> {...}" / "< {...}" lines below)');
+          }
+        }
+      } catch (debugErr) {
+        this.logger.warn('🔬 [DEBUG-SUBMIT] Failed to log re-encode snapshot', {
+          error: debugErr instanceof Error ? debugErr.message : String(debugErr),
+        });
+      }
+      // === END TEMP DEBUG ===
+
       // Submit transaction with external signature
       const submitPayload = {
         transaction: [prepared.transaction],
         signatures: [sigObject]
       };
 
-      const submitResult = await this.client.submit(submitPayload);
+      let submitResult: any;
+      try {
+        submitResult = await this.client.submit(submitPayload);
+      } finally {
+        // Restore rpc debug flag
+        if (rpcDebugRestore) {
+          rpcDebugRestore.client.debug = rpcDebugRestore.prev;
+        }
+      }
+
+      if (hasDelegate) {
+        try {
+          this.logger.info('🔬 [DEBUG-SUBMIT] Raw submit result for delegate op', {
+            requestId,
+            submitResultJson: JSON.stringify(submitResult, (_k, v) =>
+              v instanceof Uint8Array ? Buffer.from(v).toString('hex') : v
+            ),
+          });
+        } catch {}
+      }
 
       // Process results
       let txId = null;
