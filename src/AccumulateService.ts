@@ -4734,16 +4734,32 @@ export class AccumulateService {
       const bodyHashBytes = hashBody(rawTransaction.body);
       const initiatorHash = Buffer.from(bodyHashBytes).toString('hex');
 
-      // Get signer version from key page
+      // Get signer version from key page. The v3 query puts version on
+      // `account.version` (with `data.version` as an older-shape fallback and
+      // `version` as the outer legacy location). Silently defaulting to 1 when
+      // the real keypage is at version 2+ produces an envelope-level
+      // `badSignerVersion` rejection at submit time.
       let signerVersion = 1;
       try {
-        const signerInfo = await this.client.query(signerId);
-        if (signerInfo?.version !== undefined) {
-          signerVersion = Number(signerInfo.version);
+        const signerInfo: any = await this.client.query(signerId);
+        const v = signerInfo?.account?.version
+          ?? signerInfo?.data?.version
+          ?? signerInfo?.version;
+        if (v !== undefined && v !== null) {
+          signerVersion = Number(v);
+        } else {
+          this.logger.warn('🔍 Could not locate version on keypage query response', {
+            signerId,
+            topLevelKeys: signerInfo ? Object.keys(signerInfo) : [],
+            accountKeys: signerInfo?.account ? Object.keys(signerInfo.account) : [],
+          });
         }
       } catch (e) {
-        this.logger.warn('Could not query signer version, using default 1');
+        this.logger.warn('Could not query signer version, using default 1', {
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
+      this.logger.info('🔑 Resolved signer version', { signerId, signerVersion });
 
       // Generate or use provided timestamp (microseconds)
       const timestamp = providedTimestamp || this.getNextTimestamp();
